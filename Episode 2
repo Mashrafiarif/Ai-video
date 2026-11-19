@@ -1,0 +1,217 @@
+name: MeanwhileMash - Render GTA episode
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install renderer dependencies
+        run: |
+          python -m pip install pillow numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Render episode
+        run: |
+          cat > render.py <<'PYTHON_RENDERER'
+          """MeanwhileMash: procedural low-poly pilot. Requires Pillow, NumPy, FFmpeg."""
+          import argparse, math, subprocess, os
+          from functools import lru_cache
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont
+
+          P=argparse.ArgumentParser(); P.add_argument('--output',default='episode02.mp4'); P.add_argument('--width',type=int,default=1080); P.add_argument('--fps',type=int,default=30); P.add_argument('--still',type=float); A=P.parse_args()
+          W=A.width; H=W*16//9; S=W/720; FPS=A.fps
+          LIME='#C6FF00'; WHITE='#F5F5F5'; SLATE='#64748B'; DARK='#101820'
+          FONT='/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+          REG='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+          @lru_cache(None)
+          def font(n,b=True): return ImageFont.truetype(FONT if b else REG,max(1,round(n*S)))
+          def xy(x,y):return (round(x*S),round(y*S))
+          def txt(d,x,y,t,size=36,fill=WHITE,anchor='mm',bold=True): d.text(xy(x,y),t,font=font(size,bold),fill=fill,anchor=anchor,stroke_width=0)
+          def line(d,pts,fill,width=1): d.line([xy(*p) for p in pts],fill=fill,width=max(1,round(width*S)))
+          def rect(d,x,y,w,h,fill,rad=0,outline=None): d.rounded_rectangle([xy(x,y),xy(x+w,y+h)],radius=round(rad*S),fill=fill,outline=outline,width=max(1,round(S)))
+          def smooth(x): x=max(0,min(1,x));return x*x*(3-2*x)
+          def rgb(h):return np.array(tuple(int(h[i:i+2],16) for i in (1,3,5)),float)
+          Y,X=np.mgrid[0:H,0:W]; rr=np.sqrt(((X-W*.48)/W)**2+((Y-H*.54)/H)**2); glow=np.maximum(0,1-rr*2.15)**1.6
+          BG=Image.fromarray(np.uint8(np.clip(np.array([12,18,25])+glow[:,:,None]*np.array([18,32,37]),0,255)),'RGB'); del X,Y,rr,glow
+          # Meshes are drawn with a perspective camera and face lighting (no external assets).
+          CUBE=np.array([[-.5,-.5,-.5],[.5,-.5,-.5],[.5,.5,-.5],[-.5,.5,-.5],[-.5,-.5,.5],[.5,-.5,.5],[.5,.5,.5],[-.5,.5,.5]])
+          FACES=[[0,3,2,1],[4,5,6,7],[0,4,7,3],[1,2,6,5],[3,7,6,2],[0,1,5,4]]
+          # ring mesh, faceted for the recognizable head
+          HEAD=np.array([[0,.56,0]]+[[.43*math.cos(j*math.pi/4),y,.39*math.sin(j*math.pi/4)] for y in [.27,-.21] for j in range(8)]+[[0,-.48,0]])
+          HF=[]
+          for j in range(8):
+           k=(j+1)%8; HF.extend([[0,1+k,1+j],[1+j,1+k,9+k],[1+j,9+k,9+j],[17,9+j,9+k]])
+          LIGHT=np.array([-.4,.85,.5]); LIGHT/=np.linalg.norm(LIGHT)
+          def mesh(out,verts,faces,color):
+           col=rgb(color)
+           for f in faces:
+            p=verts[f]; n=np.cross(p[1]-p[0],p[2]-p[0]); l=np.linalg.norm(n)
+            if l<1e-8: continue
+            n/=l; shade=.51+.49*max(0,float(n@LIGHT)); c=tuple(np.uint8(np.clip(col*shade,0,255))); out.append((p,c,n))
+          def box(out,pos,size,color,rz=0,ry=0):
+           v=CUBE*np.array(size); cz,sz=math.cos(rz),math.sin(rz); cy,sy=math.cos(ry),math.sin(ry)
+           v=v@np.array([[cz,sz,0],[-sz,cz,0],[0,0,1]])@np.array([[cy,0,-sy],[0,1,0],[sy,0,cy]])+pos
+           mesh(out,v,FACES,color)
+          def limb(out,a,b,w,color):
+           a,b=np.array(a),np.array(b); u=b-a; length=np.linalg.norm(u); u/=length; x=np.cross(u,[0,0,1]); x/=max(np.linalg.norm(x),1e-8); z=np.cross(x,u); v=CUBE*np.array([w,length,w]); v=v@np.stack([x,u,z])+(a+b)/2; mesh(out,v,FACES,color)
+          def mash(out,x=0,z=0,t=0,seated=False):
+           y=.73 if seated else 1.14; phase=math.sin(t*2*math.pi)
+           box(out,[x,y+.45,z],[.61,.76,.36],LIME)
+           box(out,[x,y+.02,z],[.52,.22,.34],'#3D4C56')
+           mesh(out,HEAD*.84+[x,y+1.02,z],HF,WHITE)
+           for side in [-1,1]:
+            xx=x+side*.19
+            if seated:
+             limb(out,[xx,y,z],[xx,.73,z+.52],.19,'#465661'); limb(out,[xx,.73,z+.52],[xx,.16,z+.52],.17,'#465661'); footz=z+.64
+             shoulder=[x+side*.36,y+.69,z]; elbow=[x+side*.49,y+.25,z+.19]; hand=[x+side*.20,y+.34+(phase*.08 if side==1 else 0),z+.78]
+            else:
+             limb(out,[xx,y,z],[xx,.6,z],.21,'#465661'); limb(out,[xx,.6,z],[xx,.14,z],.19,'#465661'); footz=z+.1
+             shoulder=[x+side*.37,y+.69,z]; elbow=[x+side*.49,y+.29,z]; hand=[x+side*.55,y+.02,z+.05]
+            box(out,[xx,.10,footz],[.24,.20,.37],WHITE)
+            limb(out,shoulder,elbow,.19,LIME); limb(out,elbow,hand,.14,WHITE); box(out,hand,[.16,.15,.16],WHITE)
+          @lru_cache(maxsize=512)
+          def stack_mesh(x,z,h,w=.8,base=0):
+           out=[]
+           # stacked notes, drawn as layered bundles rather than a literal quantity
+           n=max(1,min(9,math.ceil(h/.14))); step=h/n
+           for j in range(n): box(out,[x,base+(j+.5)*step,z],[w,step*.87,w*.48],'#A8C5A1' if j%2 else '#789D78')
+           box(out,[x,base+h+.012,z],[w*.18,.023,w*.49],'#E8E3CA')
+           return out
+          def stack(out,x,z,h,w=.8,base=0):out.extend(stack_mesh(x,z,h,w,base))
+          def desk(out):
+           box(out,[0,.94,.92],[1.82,.12,.84],'#64748B')
+           for x in [-.77,.77]:
+            for z in [.63,1.21]: box(out,[x,.45,z],[.11,.87,.11],'#364754')
+           box(out,[0,.49,-.07],[.62,.15,.57],'#64748B')
+           for x in [-.23,.23]:box(out,[x,.23,-.07],[.08,.46,.08],'#364754')
+          def camera(az,dist,aimy=1.2):
+           target=np.array([0,aimy,0.4]); eye=target+np.array([math.sin(az)*dist,dist*.40,math.cos(az)*dist]); f=target-eye;f/=np.linalg.norm(f);r=np.cross(f,[0,1,0]);r/=np.linalg.norm(r);u=np.cross(r,f);return eye,r,u,f
+          def projector(cam):
+           eye,r,u,f=cam
+           def project(p):
+            q=p-eye; z=q@f; return np.stack([360+(q@r)*720/z,650-(q@u)*720/z],axis=-1),z
+           return project
+          def draw3d(d,out,cam):
+           eye,r,u,f=cam
+           visible=[]
+           for count in (3,4):
+            rows=[(p,c,n) for p,c,n in out if len(p)==count]
+            if not rows:continue
+            ps=np.array([row[0] for row in rows]); normals=np.array([row[2] for row in rows]); q=ps-eye; z=q@f
+            valid=(np.einsum('ij,ij->i',eye-ps.mean(1),normals)>0)&(z.min(1)>.12)
+            ids=np.flatnonzero(valid); q=q[ids]; z=z[ids]
+            coords=np.stack([360+(q@r)*720/z,650-(q@u)*720/z],axis=-1)*S
+            coords=np.rint(coords).astype(int)
+            visible.extend((depth,coord.tolist(),rows[j][1]) for j,depth,coord in zip(ids,z.mean(1),coords))
+           for _,a,c in sorted(visible,key=lambda v:-v[0]):d.polygon([tuple(q) for q in a],fill=c)
+          def floor(d,cam):
+           project=projector(cam)
+           for i in range(-12,13):
+            for p in [np.array([[i,0,-10],[i,0,8]]),np.array([[-12,0,i],[12,0,i]])]:
+             a,z=project(p)
+             if min(z)>.3:line(d,a,'#263941')
+          # Original procedural city; no third-party gameplay or game assets.
+          def customcam(az,dist,aimy=1.2,cx=0,cz=0,elev=.36):
+           target=np.array([cx,aimy,cz]); eye=target+np.array([math.sin(az)*dist,dist*elev,math.cos(az)*dist]); f=target-eye; f/=np.linalg.norm(f);r=np.cross(f,[0,1,0]);r/=np.linalg.norm(r);u=np.cross(r,f);return eye,r,u,f
+          @lru_cache(maxsize=16)
+          def backdrop(i):
+           top,bot=[('#132C50','#EEA477'),('#10324C','#EAB887'),('#254E69','#D7C8A1'),('#251C49','#E47764'),('#121932','#483C69'),('#11192C','#343750'),('#142D45','#E6A276')][i]
+           y=np.linspace(0,1,H)[:,None,None]; a=rgb(top)*(1-y)+rgb(bot)*y; return Image.fromarray(np.uint8(np.repeat(a,W,axis=1)),'RGB')
+          def palm(out,x,z,h):
+           limb(out,[x,0,z],[x+.18,h,z],.17,'#A78B69')
+           for k in range(6):
+            a=k*math.tau/6; v=np.array([math.cos(a),0,math.sin(a)]); side=np.array([-v[2],0,v[0]])*.30; c=np.array([x+.18,h,z]); mid=c+v*.64+np.array([0,.16,0]); tip=c+v*1.26+np.array([0,-.36,0]); pts=np.array([c,mid+side,tip,mid-side]); mesh(out,pts,[[0,3,2,1]],'#3C996F');mesh(out,pts,[[0,1,2,3]],'#57B881')
+          @lru_cache(maxsize=8)
+          def city(night):
+           out=[]
+           box(out,[0,-.14,-1],[19,.22,29],'#535F6A')
+           box(out,[0,-.018,-1],[5.7,.05,29],'#303C4C')
+           for z in range(-14,14,3):box(out,[0,.022,z],[.12,.018,1.25],'#F2D39A')
+           for side in [-1,1]:
+            box(out,[side*3.5,.02,-1],[1.1,.19,27],'#C6B6A7')
+            for z in [-9,-3,3,9]:palm(out,side*3.5,z,2.8+(z%3)*.3)
+            for j,z in enumerate([-12,-7,-2,3,8]):
+             bx=side*(5.5+j%2*.35); h=2.9+(j*7+side*3)%5*.7; col=['#CF86A5','#E4BBA1','#79A5AE','#8984A8','#A3BCC0'][j]; col='#41485F' if night else col
+             box(out,[bx,h/2,z],[2.7,h,3.7],col)
+             box(out,[bx,h+.12,z],[2.9,.24,3.9],'#B5A8B0' if not night else '#64748B')
+             for y in np.arange(.6,h-.3,.9):
+              for dz in [-1.15,0,1.15]:box(out,[bx-side*1.37,y,z+dz],[.055,.40,.55],'#F3C97C' if night else '#385C70')
+            for j in range(4):
+             x=side*(5.5+j*2.8); h=4+(j*3+side)%5;box(out,[x,h/2,-17],[2.3,h,2.6],'#596F8C' if night else '#7F9FB2')
+           return out
+          def car(out,x,z,col,police=False,wreck=False):
+           box(out,[x,.44,z],[1.34,.48,2.72],col)
+           box(out,[x,.67,z+.14],[1.26,.20,2.48],col)
+           box(out,[x,.87,z-.22],[1.03,.49,1.12],'#263C50')
+           box(out,[x,.99,z-.22],[1.10,.12,1.15],col)
+           for a in [-1,1]:
+            for b in [-.88,.88]:box(out,[x+a*.68,.24,z+b],[.28,.45,.48],'#17212B')
+            box(out,[x+a*.42,.50,z+1.37],[.30,.15,.04],'#F9F5CB')
+            box(out,[x+a*.42,.50,z-1.37],[.25,.14,.05],'#FF655A')
+           if police:
+            box(out,[x,1.12,z-.20],[.73,.12,.25],'#182335'); box(out,[x-.21,1.20,z-.20],[.28,.12,.22],'#FF4163');box(out,[x+.21,1.20,z-.20],[.28,.12,.22],'#42BAFF')
+           if wreck:
+            box(out,[x,.70,z+1.01],[1.28,.22,.63],'#5F7B81',rz=.23);box(out,[x+.42,.22,z+1.65],[.42,.12,.35],'#26313B')
+          def chopper(out,x,y,z,t):
+           box(out,[x,y,z],[.93,.57,1.55],'#445469');box(out,[x,y+.06,z+.65],[.71,.44,.38],'#83B5C7');box(out,[x,y+.13,z-1.23],[.21,.23,1.29],'#445469');box(out,[x,y+.38,z-1.78],[.2,.65,.33],'#445469')
+           for dx in [-.42,.42]:box(out,[x+dx,y-.43,z],[.12,.10,1.35],'#222D3C')
+           box(out,[x,y+.43,z],[.11,.25,.11],WHITE)
+           for ang in [t*12,t*12+math.pi/2]:box(out,[x,y+.60,z],[3.1,.045,.11],'#A9B6C5',ry=ang)
+          SCENES=[(0,4,'24 HOURS','INSIDE A GAME'),(4,9,'08:00 AM','THE DREAM BEGINS'),(9,14,'12:00 PM','THE CHASE BEGINS'),(14,19,'06:00 PM','THE DREAM FALLS APART'),(19,23,'ONE LIFE','THIS IS NOT A GAME'),(23,27,'NO RESPAWNS','EVERY CHOICE MATTERS'),(27,30,'WOULD YOU SURVIVE?','UNTIL MORNING?')]
+          def frame(t):
+           i=next((j for j,s in enumerate(SCENES) if t<s[1]),6);a,b,title,sub=SCENES[i];p=(t-a)/(b-a);im=backdrop(i).copy();d=ImageDraw.Draw(im);out=[]
+           az=[.20,-.24,.18,.24,.16,-.20,.23][i]+.20*math.sin(p*math.pi)
+           dist=[7.8+2.2*smooth(p),5.7,7.4,7.2,4.9,5.3,8+3*smooth(p)][i]
+           cz=[0,0,0,0,0,0,0][i]; cam=customcam(az,dist,1.32 if i!=3 else 1.65,cz=cz,elev=.38 if i!=1 else .26)
+           # Drive motion is simulated by moving car and lane scenery relative to the camera.
+           out.extend(city(i in [3,4,5]));
+           if i==0:
+            mash(out,x=-1.1,z=.5,t=t);car(out,.9,-.6,'#D2FF39');
+           elif i==1:
+            car(out,-.9,.60+.45*math.sin(p*math.pi),'#C6FF00');mash(out,x=1.25,z=.30,t=t)
+           elif i==2:
+            car(out,.95,1.4+.55*p,'#C6FF00');car(out,-.9,-1.45+1.25*p,'#E2E5E5',True);car(out,.95,-3.8+1.25*p,'#E2E5E5',True)
+           elif i==3:
+            car(out,-1.05,.15,'#84932B',wreck=True);mash(out,x=.76,z=.5,t=t);chopper(out,1.1,4.0,-1.6,t);car(out,1.2,-3,'#E2E5E5',True)
+           elif i==4:
+            mash(out,t=t);car(out,-1.20,-2.5,'#84932B',wreck=True);chopper(out,-2.2,3.7,-4.5,t)
+           elif i==5:
+            mash(out,x=.25,z=.2,t=t);car(out,-1.0,-2.4,'#E2E5E5',True);chopper(out,1.4,4.1,-3,t)
+           else:
+            mash(out,t=t);car(out,-1.3,-1.15,'#C6FF00')
+           draw3d(d,out,cam)
+           # Header and title panels preserve legibility over bright tropical colors.
+           rect(d,19,22,682,124,'#101820',20);txt(d,39,51,'meanwhile',23,WHITE,'lm');offset=font(23).getlength('meanwhile')/S;txt(d,39+offset,51,'mash',23,LIME,'lm');txt(d,680,51,'02 / WHAT IF',14,'#A8B5C0','rm');line(d,[(39,79),(680,79)],'#344653');txt(d,39,112,'GTA 6  /  A FICTIONAL SCENARIO',18,WHITE,'lm');txt(d,680,112,f'0{i+1} / 07',16,LIME,'rm')
+           rect(d,28,164,664,148,'#101820',20);size=61 if len(title)<13 else 45;txt(d,360,222,title,size,LIME);txt(d,360,276,sub,23,WHITE)
+           if i==2 or i==3:
+            # Stylized siren indicator, not a replicated game interface.
+            rect(d,235,335,250,45,'#101820',11);txt(d,360,358,'PURSUIT' if i==2 else 'HELICOPTERS',19,'#FF788D' if int(t*3)%2 else WHITE)
+           if i==4 or i==5:
+            rect(d,244,335,232,50,'#101820',11);txt(d,360,360,'1 LIFE REMAINING',19,LIME)
+           labels=['A dream vacation… or a nightmare?','Sunshine. Supercars. Freedom.','One wrong turn changes everything.','The consequences start to feel real.','Your choices have consequences.','There is no second chance.','Could you make it to sunrise?']
+           rect(d,37,1012,646,113,'#101820',18);rect(d,54,1029,5,76,LIME,2);txt(d,76,1051,labels[i],20,WHITE,'lm');txt(d,76,1089,'C U R I O S I T Y   W I T H O U T   L I M I T S',12,'#A8B5C0','lm');line(d,[(40,1150),(680,1150)],'#64748B',3);line(d,[(40,1150),(40+640*min(1,t/30),1150)],LIME,3)
+           return im
+          if A.still is not None:frame(A.still).save(A.output)
+          else:
+           cmd=['ffmpeg','-hide_banner','-loglevel','warning','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-movflags','+faststart',A.output]
+           proc=subprocess.Popen(cmd,stdin=subprocess.PIPE)
+           for k in range(30*FPS):
+            proc.stdin.write(frame(k/FPS).tobytes())
+            if k%(5*FPS)==0: print(f'{k/FPS:.0f}s / 30s',flush=True)
+           proc.stdin.close(); assert proc.wait()==0
+          PYTHON_RENDERER
+          python render.py --width 1080 --fps 30 --output meanwhilemash-episode02.mp4
+      - name: Upload MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanwhilemash-episode02
+          path: meanwhilemash-episode02.mp4
+          retention-days: 7

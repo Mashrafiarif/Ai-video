@@ -1,8 +1,6 @@
 
-# MeanwhileMash N08 | Level 1.2 V5 | Fictional scenario
-# Updated with integrated animated subscribe outro
-# Physics: https://openstax.org/books/university-physics-volume-1/pages/6-4-drag-force-and-terminal-speed
-# https://openstax.org/books/college-physics-ap-courses/pages/11-8-cohesion-and-adhesion-in-liquids-surface-tension-and-capillary-action
+# MeanwhileMash N08 | Level 1.2 V5 | Enhanced 2.5D
+# Fictional scenario with illustrative physics
 name: MeanwhileMash - Ant Size N08
 on:
   workflow_dispatch:
@@ -44,10 +42,9 @@ jobs:
           p=argparse.ArgumentParser();p.add_argument('--width',type=int,default=1080);p.add_argument('--duration',type=float,default=44);a=p.parse_args()
           W=a.width;H=W*16//9;S=W/720;D=a.duration;FPS=30;SR=48000
           assert 20<=D<=60
-          L='#C6FF00';F='#F5F5F5';G='#64748B';K='#0A1117';M='#384953';A='#E1B375';C='#76D9EC'
-          T=[0,4,8,12,16,23,29,34,40]
-          def clamp(v):return max(0,min(1,v))
-          def ease(v):v=clamp(v);return v*v*(3-2*v)
+          L='#C6FF00';F='#F5F5F5';G='#64748B';K='#101820';M='#384953';A='#E1B375';C='#76D9EC'
+          T=[0,4,8,12,16,23,29,34,44]
+          def ease(v):v=max(0,min(1,v));return v*v*(3-2*v)
           def ph(q,t,d):return ease((q-t)/d)
           def xy(x,y):return (round(x*S),round(y*S))
           @lru_cache(None)
@@ -59,98 +56,105 @@ jobs:
           def ell(d,x,y,rx,ry,c,o=None,sw=1):d.ellipse([xy(x-rx,y-ry),xy(x+rx,y+ry)],fill=c,outline=o,width=max(1,round(sw*S)))
           def line(d,pts,c,w=2):d.line([xy(*v) for v in pts],fill=c,width=max(1,round(w*S)),joint='curve')
           def poly(d,pts,c):d.polygon([xy(*v) for v in pts],fill=c)
-          def arrow(d,x,y,xx,yy,c):
-           line(d,[(x,y),(xx,yy)],c,3);v=math.atan2(yy-y,xx-x);poly(d,[(xx,yy),(xx-13*math.cos(v-.45),yy-13*math.sin(v-.45)),(xx-13*math.cos(v+.45),yy-13*math.sin(v+.45))],c)
-          def shadow(d,x,y,w):ell(d,x,y,w,10,K)
-          def human(d,x,y,h,pose=0):
-           z=h/100;ell(d,x,y-88*z,12*z,12*z,F);box(d,x-17*z,y-72*z,34*z,39*z,L,9*z)
+          def shade(c,f):return tuple(min(255,round(int(c[j:j+2],16)*f)) for j in (1,3,5))
+          y,x=np.ogrid[:H,:W];v=np.clip(1-np.sqrt(((x/W-.5)*1.6)**2+((y/H-.53)*1.2)**2),0,1)**2
+          back=Image.fromarray(np.uint8(np.array([16,24,32])+v[:,:,None]*np.array([30,41,48])));del x,y,v
+          # Lightweight perspective projection.
+          class Stage:
+           def __init__(self,d,yaw=.18,eye=.8,focal=620,horizon=570):self.d=d;self.eye=eye;self.f=focal;self.h=horizon;self.c=math.cos(yaw);self.s=math.sin(yaw);self.faces=[]
+           def camera(self,p):
+            x,y,z=p;return x*self.c-z*self.s,y-self.eye,x*self.s+z*self.c+4
+           def project(self,p):
+            x,y,z=self.camera(p);z=max(.15,z);return 360+self.f*x/z,self.h-self.f*y/z
+           def face(self,pts,c):
+            zz=[self.camera(p)[2] for p in pts]
+            if min(zz)>.15:self.faces.append((sum(zz)/len(zz),[self.project(p) for p in pts],c))
+           def cuboid(self,x,y,z,w,h,b,c):
+            p=[(x+i*w,y+j*h,z+k*b) for k in (0,1) for j in (0,1) for i in (0,1)]
+            for ids,f in [((0,1,3,2),.8),((4,6,7,5),.65),((0,2,6,4),.72),((1,5,7,3),.93),((2,3,7,6),1.18),((0,4,5,1),.6)]:self.face([p[i] for i in ids],shade(c,f))
+           def floor(self):
+            box(self.d,0,self.h,720,1280-self.h,'#24353D')
+            for j in range(-2,15):
+             if min(self.camera((-10,0,j))[2],self.camera((10,0,j))[2])>.15:line(self.d,[self.project((-10,0,j)),self.project((10,0,j))],'#30434B',1)
+            for k in range(-10,11):
+             z=-2
+             while self.camera((k,0,z))[2]<.22:z+=.25
+             line(self.d,[self.project((k,0,z)),self.project((k,0,15))],'#30434B',1)
+           def flush(self):
+            for _,pts,c in sorted(self.faces,reverse=True,key=lambda a:a[0]):poly(self.d,pts,c)
+            self.faces=[]
+           def ball(self,x,y,z,rx,ry,c):
+            px,py=self.project((x,y,z));scale=self.f/max(.15,self.camera((x,y,z))[2]);sphere(self.d,px,py,rx*scale,ry*scale,c)
+           def shadow(self,x,z,r):
+            px,py=self.project((x,0,z));s=self.f/max(.15,self.camera((x,0,z))[2]);ell(self.d,px,py,r*s,r*s*.17,'#111C23')
+           def person(self,x,y,z,h,walk=0):
+            d=self.d;px,py=self.project((x,y,z));s=h*self.f/max(.15,self.camera((x,y,z))[2]);human(d,px,py,s,walk)
+          def sphere(d,x,y,rx,ry,c):
+           if min(rx,ry)<1:return
+           for j in range(9):
+            f=j/9;ell(d,x-rx*.18*f,y-ry*.22*f,rx*(1-.62*f),ry*(1-.62*f),shade(c,.57+.63*f))
+           ell(d,x-rx*.28,y-ry*.35,rx*.13,ry*.09,shade(c,1.35))
+          def human(d,x,y,h,walk=0):
+           if h<2:ell(d,x,y,1,1,L);return
+           z=h/100;stride=math.sin(walk)*9*z
            for k in [-1,1]:
-            line(d,[(x+k*13*z,y-66*z),(x+k*(25+pose*8)*z,y-(43+pose*13)*z)],F,9*z);line(d,[(x+k*8*z,y-35*z),(x+k*13*z,y-4*z)],F,8*z)
-          def block(d,x,y,w,h,z):
-           box(d,x,y-h,w,h,'#536672');poly(d,[(x,y-h),(x+z,y-h-z*.48),(x+w+z,y-h-z*.48),(x+w,y-h)],'#8296A1');poly(d,[(x+w,y-h),(x+w+z,y-h-z*.48),(x+w+z,y-z*.48),(x+w,y)],'#35464E')
-          def ground(d,y):
-           poly(d,[(40,y),(680,y),(720,1080),(0,1080)],'#23343D')
-           for x in range(-2,9):line(d,[(360+(x-3)*48,y),(x*120-60,1080)],M,1)
-           for z in [0,20,52,100,168]:line(d,[(20,y+z),(700,y+z)],M,1)
+            line(d,[(x+k*7*z,y-36*z),(x+k*12*z,y-18*z),(x+k*13*z+k*stride,y-4*z)],'#B2C1C9',9*z);ell(d,x+k*13*z+k*stride,y-3*z,7*z,4*z,F)
+            line(d,[(x+k*14*z,y-65*z),(x+k*23*z,y-44*z+stride*k)],'#C8D3D8',8*z)
+           box(d,x-16*z,y-72*z,32*z,38*z,'#83B000',8*z);box(d,x-15*z,y-71*z,21*z,35*z,L,7*z);sphere(d,x,y-87*z,12*z,13*z,F)
           def ant(d,x,y,s,q):
            for j in range(3):
             for k in [-1,1]:
-             v=math.sin(q*8+j*2+k)*12;xx=x+(j-1)*36*s;line(d,[(xx,y),(xx+k*30*s,y+(36+v)*s),(xx+k*48*s,y+(63+v)*s)],A,5*s)
-           for xx,rx,ry in [(x+66*s,52,34),(x,31,25),(x-48*s,30,26)]:
-            ell(d,xx,y,rx*s,ry*s,'#754D3C',A,2);ell(d,xx-8*s,y-8*s,rx*s*.6,ry*s*.46,'#9F6F50')
-           for k in [-1,1]:line(d,[(x-60*s,y-12*s),(x-83*s,y-34*s),(x-108*s,y+k*18*s-40*s)],A,3*s)
-           ell(d,x-63*s,y-8*s,5*s,5*s,K)
-          y,x=np.ogrid[:H,:W];v=np.clip(1-np.sqrt(((x/W-.5)*1.6)**2+((y/H-.52)*1.2)**2),0,1)**2
-          back=Image.fromarray(np.uint8(np.array([16,24,32])+v[:,:,None]*np.array([23,34,39])));del x,y,v
+             v=math.sin(q*8+j*2+k)*13;xx=x+(j-1)*43*s;pts=[(xx,y),(xx+k*38*s,y+(31+v)*s),(xx+k*60*s,y+(65+v)*s)];line(d,pts,'#4C3028',8*s);line(d,pts,'#A36E4C',3*s)
+           for xx,rx,ry in [(x+67*s,52,34),(x,31,25),(x-48*s,30,26)]:sphere(d,xx,y,rx*s,ry*s,'#9F6947')
+           for k in [-1,1]:line(d,[(x-60*s,y-12*s),(x-83*s,y-35*s),(x-112*s,y+k*18*s-42*s+math.sin(q*5)*4*s)],A,3*s)
+           sphere(d,x-63*s,y-8*s,5*s,5*s,'#36414A')
           HEAD=[('WHAT IF YOU SHRANK','TO JUST 5 MM?'),('YOUR BEDROOM','BECOMES A LANDSCAPE'),('ONE STAIR','34× YOUR HEIGHT'),('SMALLER BODY','MUCH LESS MASS'),('FALLING','AIR RESISTANCE MATTERS'),('A WATER DROPLET','COULD TRAP YOU'),('MEET YOUR','ANT-SIZED NEIGHBOR'),('THE WORLD','DID NOT GET BIGGER')]
-          FOOT=['FICTIONAL TRANSFORMATION','ILLUSTRATIVE MACRO VIEW','EXAMPLE: 170 MM RISER / 5 MM HUMAN','SAME DENSITY • PROPORTIONAL SHAPE','ILLUSTRATIVE MOTION • NOT A SAFETY CLAIM','SURFACE TENSION • WETTING MATTERS','ANT SIZE VARIES BY SPECIES','YOU GOT SMALLER.']
+          FOOT=['FICTIONAL TRANSFORMATION','ILLUSTRATIVE MACRO VIEW','170 MM RISER / 5 MM HUMAN','SAME DENSITY • PROPORTIONAL SHAPE','ILLUSTRATIVE FALL • NOT A SAFETY CLAIM','SURFACE TENSION • WETTING MATTERS','ANT SIZE VARIES BY SPECIES','YOU GOT SMALLER.']
           def frame(sec):
            t=sec*44/D;i=next((j for j in range(8) if t<T[j+1]),7);q=t-T[i];im=back.copy();d=ImageDraw.Draw(im)
-           tx(d,42,55,'meanwhile',24,F,'lm');tx(d,42+font(24).getlength('meanwhile')/S,55,'mash',24,L,'lm');tx(d,678,55,'SCIENCE / N08',15,G,'rm')
-           tx(d,360,165,HEAD[i][0],42);tx(d,360,230,HEAD[i][1],36,L)
            if i==0:
-            h=440-380*ph(q,.15,1.4);shadow(d,360,795,70);human(d,360,795,h)
-            r=120+45*ph(q,1.55,.6);ell(d,360,750,r,r,None,L,3);line(d,[(360+r*.7,750+r*.7),(570,960)],L,5)
-            tx(d,360,335,'IMAGINE THE IMPOSSIBLE',23,G);tx(d,360,1010,'5 mm',62,L)
+            f=ph(q,.15,1.4);s=Stage(d,.12+.12*f,1.5-.9*f,620,600);s.floor();s.shadow(0,0,.8*(1-f)+.2);s.person(0,0,0,2.5*(1-f)+.28);r=50+100*ph(q,1.55,.6);ell(d,360,740,r,r,None,L,3);tx(d,360,938,'5 mm',64,L)
            elif i==1:
-            ground(d,815);z=ph(q,.25,1.7);x=66-35*z
-            block(d,x,780,390,285,88);box(d,x+10,486,374,56,'#A3B0B5',15);box(d,x+24,456,125,40,F,12)
-            block(d,484,780,94,490,65);box(d,453,329,159,37,A,9)
-            for j in range(3):block(d,100+j*72,856,50,28,14)
-            shadow(d,350,885,15);human(d,325+45*ph(q,2,.7),885,28,1);tx(d,360,960,'FURNITURE BECOMES TERRAIN',23,L)
+            g=ph(q,.25,1.7);s=Stage(d,-.24+.08*g,.58,780,640);s.floor();s.cuboid(-2.2,0,2,3.4,1.2,2.6,'#647D8D');s.cuboid(-2.2,1.2,2,3.4,.3,2.6,'#B4C5C9');s.cuboid(-1.9,1.5,3.9,1.35,.2,.55,'#E1E6E4');s.cuboid(2,0,3.2,.2,2.1,.2,'#A27B50');s.cuboid(1.6,2.1,2.8,1.7,.15,1.8,'#BF986F');s.flush();s.shadow(-.3,0,.23);s.person(-.3+.24*ph(q,2,.7),0,0,.45,q*7);tx(d,360,965,'FURNITURE BECOMES TERRAIN',23,L)
            elif i==2:
-            ground(d,860);f=ph(q,.1,1.25);block(d,225,860,430,510,45);human(d,155,860,15)
-            line(d,[(179,860),(179,860-510*f)],L,3);line(d,[(165,860),(194,860)],L,3);line(d,[(165,860-510*f),(194,860-510*f)],L,3)
-            tx(d,100,570,'170 mm',22,F,limit=140);tx(d,110,904,'5 mm',22,L);tx(d,410,955,'34× YOUR HEIGHT',28,L)
+            g=ph(q,.1,1.25);s=Stage(d,-.42+.09*g,.8,740,690);s.floor()
+            for j in range(3):s.cuboid(-1.0,0,1.0+j*1.15,2.5,1.55*(j+1),1.15,['#81949F','#91A6AE','#71858F'][j])
+            s.flush()
+            for j in range(3):line(d,[s.project((-1.0,1.55*(j+1),1.0+j*1.15)),s.project((1.5,1.55*(j+1),1.0+j*1.15))],'#B8CCD1',2)
+            s.shadow(-1.15,.8,.06);s.person(-1.15,0,.8,1.55/34);px,py=s.project((-1.15,0,.8));_,top=s.project((-1.15,1.55,.8));line(d,[(px-32,py),(px-32,py+(top-py)*g)],L,3);line(d,[(px-42,py),(px-22,py)],L,3);line(d,[(px-42,py+(top-py)*g),(px-22,py+(top-py)*g)],L,3);tx(d,max(64,px-67),(top+py)/2,'170 mm',19,L,limit=110);tx(d,px,py+27,'5 mm',20,L);tx(d,360,965,'34× YOUR HEIGHT',27,L)
            elif i==3:
-            tx(d,180,350,'1.7 M',25);tx(d,540,350,'TARGET: 5 MM',25,L);shadow(d,180,765,70);human(d,180,765,340);human(d,540,765,340*(1-ph(q,.3,1.4))+ph(q,.3,1.4))
-            arrow(d,300,590,420,590,G);tx(d,540,805,'1/340 AS TALL' if q>=1.7 else 'SHRINKING...',23,L)
-            if q>=2:tx(d,360,935,'MASS SCALES WITH LENGTH³',27,L)
+            f=ph(q,.3,1.4);s=Stage(d,0,.8,610,590);s.floor();s.shadow(-1,0,.48);s.person(-1,0,0,2.3);s.shadow(1,0,.48*(1-f)+.025);s.person(1,0,0,2.3*(1-f)+2.3/340*f);tx(d,207,876,'1.7 M',24);tx(d,513,876,'5 MM TARGET',22,L);tx(d,360,960,'MASS SCALES WITH LENGTH³',25,L)
            elif i==4:
-            ground(d,900);block(d,40,900,104,420,30);block(d,40,510,190,35,30)
-            f=clamp((q-.35)/4.8);yy=480+420*(.24*f+.76*f*f);xx=260+95*math.sin(f*math.pi);human(d,xx,yy,65,1)
-            if q>1.3:
-             for j in range(3):
-              y0=yy+25+j*40;arrow(d,xx-65,y0,xx-65,y0-45*ph(q,1.3,.8),C)
-             tx(d,526,655,'AIR DRAG',26,C);arrow(d,xx+65,yy-55,xx+65,yy+12,A)
-            if q>=5.15:shadow(d,260,903,34);tx(d,360,968,'LOWER FALL SPEED IS POSSIBLE',26,L)
+            f=max(0,min(1,(q-.35)/4.8));s=Stage(d,-.15,1.35,650,620);s.floor();s.cuboid(-2.3,0,1.3,.23,2.6,.23,'#A68059');s.cuboid(-2.3,2.6,1.2,1.4,.2,2.0,'#C9A47D');s.flush();x=300+90*f;y=395+440*(.65*f+.35*f*f);human(d,x,y,86,1);s.shadow(.25,0,.16)
+            if q>1.3 and f<1:
+             for j in range(3):line(d,[(x-64-j*17,y+15),(x-64-j*17,y-34)],C,3);poly(d,[(x-72-j*17,y-25),(x-64-j*17,y-42),(x-56-j*17,y-25)],C)
+             tx(d,510,570,'AIR DRAG',25,C)
+            tx(d,360,970,'LOWER FALL SPEED IS POSSIBLE',24,L)
            elif i==5:
-            ground(d,880);f=ph(q,.15,1.6);r=180*f;cy=880-r*.82;shadow(d,405,888,150*f+1)
-            if r>1:
-             ell(d,405,cy,r,r*.82,'#27667C',C,3);ell(d,405-r*.12,cy-r*.12,r*.74,r*.63,'#397E95');ell(d,405-r*.36,cy-r*.39,r*.22,r*.09,'#B6F2F6')
-            g=ph(q,2.1,1.6);human(d,185+98*g,880-38*g,108,1)
+            s=Stage(d,.08,.8,620,550);s.floor();f=ph(q,.15,1.6);r=175*f;cy=842-r*.78;ell(d,420,843,155*f+1,22*f+1,'#13252F');sphere(d,420,cy,r,r*.83,'#407F98')
+            if r>3:ell(d,420,cy,r,r*.83,None,C,3);ell(d,420-r*.34,cy-r*.39,r*.2,r*.08,'#C6FCFF');ell(d,420+r*.43,cy+r*.30,r*.1,r*.06,'#70B2C3')
+            g=ph(q,2.1,1.6);human(d,150+116*g,842-25*g,125,1);tx(d,360,965,'SURFACE TENSION',30,C)
             if q>2.4:
              for j in range(5):
-              ang=math.pi+(j+1)*math.pi/6;xx=405+r*math.cos(ang);yy=cy+r*.82*math.sin(ang);arrow(d,xx,yy,xx-25*math.sin(ang),yy+25*math.cos(ang),F)
-            tx(d,360,955,'SURFACE TENSION',31,C)
+              a=math.pi+j*math.pi/4;xx=420+r*math.cos(a);yy=cy+r*.83*math.sin(a);line(d,[(xx,yy),(xx-26*math.cos(a),yy-26*math.sin(a))],F,3)
            elif i==6:
-            ground(d,850);g=ph(q,.15,2.3);xx=800-350*g;shadow(d,xx,850,115);ant(d,xx,751,1.4,min(q,2.45));human(d,140,850,140,1);tx(d,140,894,'YOU',24,L);tx(d,450,894,'ANT',24,A);tx(d,360,965,'A CLOSE ENCOUNTER',29)
+            g=ph(q,.15,2.3);s=Stage(d,-.12+.22*g,.7,620,570);s.floor();x=805-355*g;ell(d,x,835,120,26,'#131D24');ant(d,x,752,1.55,min(q,2.45));ell(d,145,836,32,11,'#131D24');human(d,145,835,138,1);tx(d,145,890,'YOU',22,L);tx(d,455,890,'ANT',22,A)
            else:
-            ground(d,850);g=ph(q,.2,2.8);block(d,72,850,430,300+150*g,65);ell(d,590,795,65,55,'#397E95',C,2);ant(d,536,880,.48,0);human(d,180,888,90-70*g);tx(d,360,971,'EVERYDAY OBJECTS. NEW RULES.',25,L)
-           tx(d,360,1050,FOOT[i],19,'#A6B4BE');line(d,[(45,1120),(675,1120)],M,3);line(d,[(45,1120),(45+630*clamp(t/44),1120)],L,3)
-
-           # Integrated subscribe outro
-           # Smooth dissolve, expanding ring and tactile button.
+            g=ph(q,.2,2.8);s=Stage(d,-.10+.25*g,.6,620,590);s.floor();s.cuboid(-1.8,0,1.4,2.8,1.9,2.0,'#78929E');s.flush();s.shadow(-.7,0,.2);s.person(-.7,0,0,.55-.30*g);sphere(d,560,780,48,39,'#407F98');ant(d,540,880,.36,0);tx(d,360,970,'EVERYDAY OBJECTS. NEW RULES.',23,L)
+           box(d,20,20,680,255,K,18);tx(d,42,55,'meanwhile',24,F,'lm');tx(d,42+font(24).getlength('meanwhile')/S,55,'mash',24,L,'lm');tx(d,678,55,'SCIENCE / N08',15,G,'rm');tx(d,360,165,HEAD[i][0],42);tx(d,360,230,HEAD[i][1],36,L)
+           box(d,24,1020,672,108,K,14);tx(d,360,1050,FOOT[i],19,'#A6B4BE');line(d,[(45,1100),(675,1100)],M,3);line(d,[(45,1100),(45+630*min(1,t/44),1100)],L,3)
+           # Smooth subscribe outro.
            if t>=39:
-            u=t-39;out=back.copy();o=ImageDraw.Draw(out)
-            r=36+160*ph(u,0,1.0)
-            ell(o,360,595,r,r,None,L,3);ell(o,360,595,r*.86,r*.86,None,M,1)
-            tx(o,360,335,'MORE TO DISCOVER',32,F)
-            px=360-font(43).getlength('meanwhilemash')/(2*S)
-            tx(o,px,555,'meanwhile',43,F,'lm');tx(o,px+font(43).getlength('meanwhile')/S,555,'mash',43,L,'lm')
+            u=t-39;out=back.copy();o=ImageDraw.Draw(out);r=36+160*ph(u,0,1);ell(o,360,595,r,r,None,L,3);ell(o,360,595,r*.86,r*.86,None,M,1);tx(o,360,335,'MORE TO DISCOVER',32,F);x=360-font(43).getlength('meanwhilemash')/(2*S);tx(o,x,555,'meanwhile',43,F,'lm');tx(o,x+font(43).getlength('meanwhile')/S,555,'mash',43,L,'lm')
             if u>=1.15:
-             b=ph(u,1.15,.55);press=math.exp(-((u-3.0)/.13)**2);w=max(1,390*b*(1-.06*press));h=78*(1-.08*press)
-             box(o,360-w/2,666,w,h,K,39);box(o,360-w/2,660,w,h,L,39)
+             b=ph(u,1.15,.55);press=math.exp(-((u-3)/.13)**2);w=max(1,390*b*(1-.06*press));h=78*(1-.08*press);box(o,360-w/2,666,w,h,K,39);box(o,360-w/2,660,w,h,L,39)
              if b>.48:tx(o,360,660+h/2,'SUBSCRIBE',32,K,limit=max(20,w-24))
-             if u>=3.0:
-              e=ph(u,3.0,.65)
-              if e<1:ell(o,360,699,205+45*e,52+35*e,None,L,1)
+             if 3<=u<=3.65:
+              e=ph(u,3,.65);ell(o,360,699,205+45*e,52+35*e,None,L,1)
             if u>=1.7:tx(o,360,810,'GET UPDATED',23,F)
-            tx(o,360,1010,'CURIOSITY WITHOUT LIMITS',18,'#A6B4BE')
-            im=Image.blend(im,out,ph(u,0,1.05))
+            tx(o,360,1010,'CURIOSITY WITHOUT LIMITS',18,'#A6B4BE');im=Image.blend(im,out,ph(u,0,1.05))
            return im
-
-          # V4 synthesis primitives adapted for topic-specific action cues.
+          # Original synchronized stereo sound effects.
           def audio():
            scale=D/44;rng=np.random.default_rng(808);buf=np.zeros((round(D*SR),2),np.float32)
            def cue(at,kind='pop',span=.18,amp=.12,pan=0):
@@ -167,10 +171,7 @@ jobs:
            events=[(.15,'move',1.4),(1.55,'pop',.6),(4.25,'air',1.7),(6,'move',.7),(6.7,'land',.15),(8.1,'move',1.25),(9.35,'pop',.15),(12.3,'move',1.4),(13.7,'pop',.15),(14,'pop',.15),(16.35,'air',4.8),(17.3,'move',.8),(21.15,'land',.2),(23.15,'water',1.6),(24.75,'water',.3),(25.1,'move',1.6),(25.4,'pop',.2),(26.7,'water',.35),(29.15,'move',2.3),(31.45,'land',.2),(34.2,'air',2.8),(37,'pop',.2)]
            for at,k,span in events:cue(at,k,span)
            for j in range(12):cue(29.15+j*math.pi/16,'pop',.045,.045,(-1)**j*.25)
-
-           # Subscribe outro SFX synchronized to visual events.
            for at,k,span,amp in [(39,'air',1.05,.09),(40.05,'pop',.22,.09),(40.15,'move',.55,.075),(40.7,'pop',.17,.12),(42,'pop',.12,.13),(42.12,'water',.28,.08)]:cue(at,k,span,amp)
-
            peak=float(np.max(abs(buf)));buf*=min(1,10**(-8/20)/max(peak,1e-9))
            with wave.open('N08_SFX.wav','wb') as w:w.setparams((2,2,SR,0,'NONE','not compressed'));w.writeframes(np.int16(buf*32767).tobytes())
            print('SFX peak dBFS',20*math.log10(max(float(np.max(abs(buf))),1e-9)))
@@ -186,7 +187,7 @@ jobs:
       - name: Upload video and sound
         uses: actions/upload-artifact@v4
         with:
-          name: meanwhilemash-n08-ant-size-cta
+          name: meanwhilemash-n08-enhanced-25d
           path: |
             N08.mp4
             N08_SFX.wav

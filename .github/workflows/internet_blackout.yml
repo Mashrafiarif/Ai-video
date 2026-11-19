@@ -1,0 +1,286 @@
+
+# N04: hypothetical outage of public Internet; independent networks and electricity not assumed lost.
+# Context: https://www.internetsociety.org/resources/policybriefs/2025/internet-shutdowns/
+# Narration timing estimated; default 40 seconds.
+name: MeanwhileMash - Internet Blackout N04
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Video duration (seconds); match your voiceover'
+        required: true
+        default: '40'
+      quality:
+        description: 'Render resolution'
+        type: choice
+        options:
+          - full
+          - preview
+        default: full
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install renderer
+        run: |
+          python -m pip install pillow numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Render Internet Blackout N04
+        env:
+          DURATION: ${{ inputs.duration }}
+          QUALITY: ${{ inputs.quality }}
+        run: |
+          cat > render.py <<'MM_RENDERER'
+          import argparse, math, random, subprocess
+          from functools import lru_cache
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont, ImageFilter
+          p=argparse.ArgumentParser(); p.add_argument('--width',type=int,default=1080); p.add_argument('--fps',type=int,default=30); p.add_argument('--output',default='MeanwhileMash_N04.mp4'); p.add_argument('--still',type=float); p.add_argument('--duration',type=float,default=40); a=p.parse_args()
+          W=a.width; H=W*16//9; H-=H%2; S=W/720; FPS=a.fps; D=a.duration
+          L='#C6FF00'; WHITE='#F5F5F5'; SLATE='#64748B'; BG='#101820'; DIM='#9EABB4'; BORDER='#35434B'; PANEL='#19242C'
+          @lru_cache(None)
+          def font(n,b=True):return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans'+('-Bold' if b else '')+'.ttf',max(1,round(n*S)))
+          def pt(x,y):return (round(x*S),round(y*S))
+          def box(d,x,y,w,h,c,r=0,stroke=None,sw=1):d.rounded_rectangle([pt(x,y),pt(x+w,y+h)],radius=round(r*S),fill=c,outline=stroke,width=max(1,round(sw*S)))
+          def line(d,pts,c,w=1):d.line([pt(*q) for q in pts],fill=c,width=max(1,round(w*S)),joint='curve')
+          def poly(d,pts,c):d.polygon([pt(*q) for q in pts],fill=c)
+          def ellipse(d,x,y,rx,ry,c=None,stroke=None,sw=1):d.ellipse([pt(x-rx,y-ry),pt(x+rx,y+ry)],fill=c,outline=stroke,width=max(1,round(sw*S)))
+          def tx(d,x,y,t,n=32,c=WHITE,anchor='mm',b=True,maxw=650):
+           while font(n,b).getlength(t)>maxw*S and n>10:n-=1
+           d.text(pt(x,y),t,font=font(n,b),fill=c,anchor=anchor)
+          def ease(t): t=max(0.,min(1.,t)); return t*t*(3-2*t)
+          def mix(x,y,r):return x+(y-x)*r
+          def clamp(t):return max(0,min(1,t))
+          def rgb(h):return tuple(int(h[i:i+2],16) for i in (1,3,5))
+          def blend(a,b,v):return tuple(round(mix(x,y,v)) for x,y in zip(rgb(a),rgb(b)))
+          y,x=np.ogrid[0:H,0:W]; rr=np.sqrt(((x/W-.50)*1.35)**2+((y/H-.53)*1.1)**2); g=np.clip(1-rr*1.65,0,1)**1.7
+          back=Image.fromarray(np.uint8(np.array([12,18,24])+g[:,:,None]*np.array([18,27,29])),'RGB')
+          del x,y,rr,g
+          B=[0,4,6.8,9.5,12.5,15.4,18.3,21.2,24.5,28.5,32.8,36,40]
+          E=[[.25,.55,.85,1.15,1.45,1.75,2.05],[.3,1.1,1.9],[.25,1.35],[.25,1,1.8],[.3,1.2,2.1],[.25,1.1,2],[.3,1.2,2.1],[.25,.95,1.65,2.35],[.3,1.3,2.3],[.3,.9,1.5,2.1,2.7],[.3,1.1,1.9],[.3,1,1.7,2.4]]
+          A='#FFB35A'; K='#0B141A'; M='#40545E'; G='#243A43'; HIL='#94A8AE'
+          def arc(d,x,y,rx,ry,a,b,c,w=3):d.arc([pt(x-rx,y-ry),pt(x+rx,y+ry)],a,b,fill=c,width=max(1,round(w*S)))
+          def base(d,x,y,w=245):
+           ellipse(d,x,y+19,w+15,31,K);ellipse(d,x,y,w,30,M);ellipse(d,x,y-12,w,30,G,HIL,1)
+          def cross(d,x,y,f):
+           if f<=0:return
+           z=6+20*f;ellipse(d,x,y,z,z,'#332B25',A,2);line(d,[(x-z*.35,y-z*.35),(x+z*.35,y+z*.35)],A,4);line(d,[(x+z*.35,y-z*.35),(x-z*.35,y+z*.35)],A,4)
+          def phone(d,x,y,w,h):
+           box(d,x+12,y+12,w,h,K,27);box(d,x,y,w,h,HIL,27);box(d,x+7,y+7,w-14,h-14,K,22);box(d,x+w*.37,y+17,w*.26,7,M,4)
+          def globe(d,x,y,r,q,off):
+           ellipse(d,x+12,y+18,r,r,K);ellipse(d,x,y,r,r,G,HIL,2)
+           for v in [-.66,-.33,0,.33,.66]:
+            rx=r*math.sqrt(1-v*v);ellipse(d,x,y+v*r,rx,rx*.15,None,M,2)
+           for k in [.3,.6,.9]:ellipse(d,x,y,r*k,r,None,M,2)
+           nodes=[(-.64,-.42),(-.19,-.69),(.36,-.52),(.64,-.12),(.25,.2),(-.42,.27),(.03,.65)]
+           for j,(u,v) in enumerate(nodes):
+            xx=x+u*r;yy=y+v*r;uu,vv=nodes[(j+1)%7];c=blend(L,M,off[j]);line(d,[(xx,yy),(x+uu*r,y+vv*r)],c,3);ellipse(d,xx,yy,9,9,c)
+            if off[j]<.9:
+             z=(q*.6+j*.17)%1;ellipse(d,mix(xx,x+uu*r,z),mix(yy,y+vv*r,z),4,4,c)
+          def cash(d,x,y):
+           box(d,x,y,154,70,'#849F40',6,'#D0E599',2);box(d,x+9,y+9,136,52,'#354B38',5);ellipse(d,x+77,y+35,18,18,L);tx(d,x+77,y+35,'$',23,K)
+          def person(d,x,y,c):
+           ellipse(d,x,y-75,26,26,c);box(d,x-36,y-43,72,105,c,24);line(d,[(x-16,y+59),(x-23,y+116)],c,20);line(d,[(x+16,y+59),(x+23,y+116)],c,20)
+          def truck(d,x,y):
+           box(d,x,y,200,94,HIL,8);box(d,x+7,y+7,186,80,M,5);line(d,[(x+15,y+23),(x+184,y+23)],HIL,2);box(d,x+201,y+30,82,64,'#8DA936',8);box(d,x+212,y+38,53,28,G,4)
+           for xx in [x+40,x+165,x+244]:ellipse(d,xx,y+97,19,19,K,HIL,3);ellipse(d,xx,y+97,6,6,M)
+          HEAD=[('NO INTERNET.','FOR 7 DAYS?'),('WITHIN MINUTES','SOCIAL MEDIA GOES SILENT'),('PAYMENT FAILED','ONLINE TRANSACTIONS'),('BUSINESSES','DISCONNECTED'),('DAY 2','AIRPORT DELAYS'),('SUPPLY CHAINS','ORDERS GET STUCK'),('ONLINE BANKING','ACCESS INTERRUPTED'),('DAY 4','STOCKS COULD RUN LOW'),('BACK TO BASICS','OFFLINE ALTERNATIVES'),('DAY 7','ECONOMIC DISRUPTION'),('NOT JUST','ENTERTAINMENT'),('INVISIBLE','INFRASTRUCTURE')]
+          FOOT=['WHAT WOULD BREAK FIRST?','MESSAGES MAY NOT SEND','DIGITAL PAYMENTS COULD FAIL','CLOUD WORKFLOWS INTERRUPTED','SOME SYSTEMS HAVE BACKUPS','DELIVERIES COULD SLOW','PRIVATE NETWORKS MAY STILL WORK','ILLUSTRATIVE SHELF SHORTAGES','FACE-TO-FACE COMMUNICATION','NO GLOBAL LOSS FIGURE ASSUMED','THE REAL STORY IS BIGGER','OUR WORLD RUNS ON CONNECTION']
+          def frame(time):
+           t=time*40/D;i=next((j for j in range(12) if t<B[j+1]),11);q=t-B[i];im=back.copy();d=ImageDraw.Draw(im);P=lambda j,s=.48:ease((q-E[i][j])/s)
+           tx(d,42,56,'meanwhile',23,WHITE,'lm');tx(d,42+font(23).getlength('meanwhile')/S,56,'mash',23,L,'lm');tx(d,678,56,'WHAT IF / N04',15,DIM,'rm');line(d,[(42,87),(678,87)],BORDER)
+           tx(d,360,180,HEAD[i][0],48,WHITE,maxw=630);tx(d,360,245,HEAD[i][1],32,L,maxw=630)
+           if i==0:
+            base(d,360,850);globe(d,360,580,234,q,[P(j,.26) for j in range(7)])
+            for j in range(7):
+             f=P(j,.26);xx=100+j*86;box(d,xx-24,925,48,49,blend(M,'#3B2B23',f),8);tx(d,xx,949,str(j+1),23,blend(L,A,f))
+           elif i==1:
+            phone(d,197,333,326,550)
+            for k in [1,.72,.43]:arc(d,360,485,77*k,77*k,225,315,blend(L,SLATE,P(0)),7)
+            ellipse(d,360,485,7,7,blend(L,SLATE,P(0)))
+            for j in range(3):
+             y=565+j*80;box(d,221,y,276,58,G,12);ellipse(d,247,y+29,12,12,SLATE);box(d,269,y+16,118,9,HIL,3);box(d,269,y+33,85,7,M,3);cross(d,465,y+29,P(j))
+           elif i==2:
+            base(d,360,875);box(d,220,350,280,460,HIL,30);box(d,232,362,256,436,K,24);box(d,250,390,220,130,G,14);tx(d,360,435,'PROCESSING' if P(1)<.5 else 'DECLINED',24,L if P(1)<.5 else A);tx(d,360,479,'NO CONNECTION' if P(1)>.5 else '•••',19,DIM)
+            for j in range(9):box(d,255+72*(j%3),550+53*(j//3),55,36,M,6)
+            box(d,256,719,208,39,'#405B39',7);f=P(0);x=85+160*f;y=800-125*f;box(d,x,y,178,102,'#8097A3',12);box(d,x+14,y+22,36,27,'#C4B682',4);line(d,[(x+14,y+78),(x+153,y+78)],M,7);cross(d,540,475,P(1))
+           elif i==3:
+            base(d,360,885);box(d,291,425,138,247,HIL,9);box(d,298,432,124,233,K,5)
+            for j in range(4):box(d,308,446+j*51,104,38,M,5);ellipse(d,394,465+j*51,5,5,blend(L,SLATE,P(0)))
+            for j,(x,y) in enumerate([(115,585),(515,585),(360,780)]):
+             f=P(j);line(d,[(360,555),(x,y)],blend(L,SLATE,f),4);box(d,x-66,y-39,132,82,HIL,8);box(d,x-59,y-32,118,62,K,5);line(d,[(x-76,y+46),(x+76,y+46)],HIL,8);cross(d,x,y,f)
+           elif i==4:
+            box(d,77,355,566,353,G,20,HIL,2);tx(d,106,393,'DEPARTURES',24,WHITE,'lm')
+            for j in range(3):
+             y=465+j*82;line(d,[(98,y-31),(622,y-31)],BORDER);tx(d,110,y,'FLIGHT '+chr(65+j),22,DIM,'lm');f=P(j);tx(d,608,y,'ON TIME' if f<.5 else 'DELAYED',24,L if f<.5 else A,'rm')
+            poly(d,[(360,735),(377,800),(490,860),(490,879),(380,850),(382,908),(410,930),(410,945),(360,932),(310,945),(310,930),(338,908),(340,850),(230,879),(230,860),(343,800)],HIL);line(d,[(360,755),(360,910)],WHITE,2)
+           elif i==5:
+            box(d,65,423,225,215,M,8);poly(d,[(51,428),(178,345),(305,428)],HIL);box(d,109,490,139,148,K,5)
+            for j in range(4):line(d,[(112,508+j*27),(244,508+j*27)],M,3)
+            box(d,470,451,169,187,M,5);box(d,485,488,139,80,G,4);tx(d,554,604,'STORE',22,WHITE);line(d,[(290,535),(470,535)],blend(L,SLATE,P(1)),4);cross(d,380,535,P(1));box(d,55,790,610,71,G,4);line(d,[(64,825),(656,825)],HIL,2);truck(d,52+210*P(0),712);f=P(2);box(d,520,680-42*f,78,62,'#AC9670',4);line(d,[(559,680-42*f),(559,742-42*f)],'#DED1B0',4)
+           elif i==6:
+            poly(d,[(232,417),(360,337),(488,417)],HIL);box(d,242,420,236,160,G,4)
+            for j in range(3):box(d,270+j*74,430,29,131,HIL,3)
+            box(d,230,571,260,15,M,3);phone(d,223,650,275,274)
+            for j in range(3):
+             f=P(j);x=120+j*240;line(d,[(360,587),(x,647)],blend(L,SLATE,f),3);ellipse(d,x,647,9,9,blend(L,SLATE,f))
+            tx(d,360,715,'BALANCE',20,DIM);tx(d,360,768,'— — —',45,WHITE);tx(d,360,854,'OFFLINE' if P(2)>.5 else 'CONNECTING',23,A)
+           elif i==7:
+            box(d,91,342,538,575,G,14,HIL,2)
+            for j in range(4):
+             y=460+j*129;line(d,[(109,y+35),(610,y+35)],HIL,8)
+             for k in range(5):
+              f=P(j) if k>=j+1 else 0
+              if f>.98:continue
+              x=117+k*98;shift=f*80;c=['#94AC43','#C0B08B','#6F8C98'][k%3];box(d,x,y-58+shift,66,max(2,90-shift),blend(c,G,f),6);box(d,x+8,y-34+shift,50,max(1,12*(1-f)),blend(WHITE,G,f),2)
+           elif i==8:
+            base(d,360,920);dy=75*(1-P(0))
+            for j in range(3):cash(d,76+j*14,420+dy-j*18)
+            tx(d,172,547,'CASH',25,L);dy=75*(1-P(1));box(d,405,370+dy,197,132,HIL,14);box(d,419,385+dy,97,99,K,10)
+            for j in range(5):line(d,[(431,401+dy+j*16),(505,401+dy+j*16)],M,3)
+            ellipse(d,561,423+dy,27,27,G,HIL,2);line(d,[(565,371+dy),(600,300+dy)],HIL,5);tx(d,505,547,'RADIO',25,L);f=P(2);person(d,270-40*(1-f),755,WHITE);person(d,450+40*(1-f),755,HIL);box(d,306,595,108,52,G,16);tx(d,360,621,'•••',25,L)
+           elif i==9:
+            base(d,360,868);tx(d,360,390,'LOSSES COULD MOUNT',34,WHITE)
+            for j in range(5):
+             f=P(j,.62);x=74+j*108;y=797;h=215-j*14;ang=f*1.10;dx=math.sin(ang)*h*.67;dy=math.cos(ang)*h;w=62;poly(d,[(x,y),(x+w,y),(x+w+dx,y-dy),(x+dx,y-dy)],blend('#A0BD45','#867B65',f));line(d,[(x+dx,y-dy),(x+w+dx,y-dy)],HIL,3);tx(d,x+w/2,830,['WORK','TRADE','SALES','BANK','SERVICES'][j],15,DIM,maxw=95)
+           elif i==10:
+            phone(d,220,351,280,538)
+            for j in range(3):
+             f=P(j);y=465+j*109;box(d,252,y,216,81,blend(M,G,f),12);tx(d,360,y+40,['VIDEO','GAMES','SOCIAL'][j],25,blend(WHITE,SLATE,f));line(d,[(267,y+40),(267+185*f,y+40)],A,4) if f>0 else None
+           else:
+            globe(d,360,625,190,q,[1]*7)
+            for j,(x,y,label) in enumerate([(120,405,'MONEY'),(600,405,'TRAVEL'),(120,855,'WORK'),(600,855,'SUPPLY')]):
+             f=P(j);line(d,[(360,625),(mix(360,x,f),mix(625,y,f))],L,4);ellipse(d,x,y,47*f+2,47*f+2,G,L,2)
+             if f>.6:tx(d,x,y,label,15,WHITE,maxw=88)
+           tx(d,360,1018,FOOT[i],24,WHITE,maxw=630)
+           day=[0,1,1,1,2,2,2,4,4,7,7,7][i];tx(d,42,1084,'HYPOTHETICAL SCENARIO',15,DIM,'lm');tx(d,678,1084,'DAY '+str(day) if day else 'THE BLACKOUT',15,L,'rm');line(d,[(42,1115),(678,1115)],BORDER,3);line(d,[(42,1115),(42+636*clamp(t/40),1115)],L,3)
+           return im
+          if a.still is not None:frame(a.still).save(a.output)
+          else:
+           cmd=['ffmpeg','-hide_banner','-loglevel','warning','-y','-f','rawvideo','-pixel_format','rgb24','-video_size',f'{W}x{H}','-framerate',str(FPS),'-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-movflags','+faststart',a.output]
+           with subprocess.Popen(cmd,stdin=subprocess.PIPE) as proc:
+            for k in range(round(D*FPS)):
+             proc.stdin.write(frame(k/FPS).tobytes())
+             if k%(5*FPS)==0:print(f'{k/FPS:.0f}s / {D:g}s',flush=True)
+            proc.stdin.close()
+            if proc.wait()!=0:raise RuntimeError('FFmpeg failed')
+          MM_RENDERER
+          python -c 'import os; d=float(os.environ["DURATION"]); assert 20 <= d <= 60, "Duration must be 20–60 seconds"'
+          if [ "$QUALITY" = preview ]; then WIDTH=432; else WIDTH=1080; fi
+          python render.py --width "$WIDTH" --fps 30 --duration "$DURATION" --output visual_only.mp4
+      - name: Generate and synchronize original sound effects
+        env:
+          DURATION: ${{ inputs.duration }}
+        run: |
+          cat > sfx.py <<'MM_SFX'
+          import argparse, math, wave, random
+          import numpy as np
+          p=argparse.ArgumentParser();p.add_argument('--duration',type=float,required=True);p.add_argument('--output',default='MeanwhileMash_N04_SFX.wav');a=p.parse_args()
+          D=a.duration; SR=48000; scale=D/40; rng=np.random.default_rng(621)
+          mix=np.zeros((round(D*SR),2),dtype=np.float32)
+          def times(d):return np.arange(max(1,round(d*SR)),dtype=np.float64)/SR
+          def noise(t,lo,hi):
+           x=rng.normal(0,1,len(t));f=np.fft.rfftfreq(len(t),1/SR); b=np.fft.rfft(x);b*=np.minimum(1,(f/max(lo,1))**2)*np.minimum(1,(hi/np.maximum(f,1))**3);z=np.fft.irfft(b,n=len(t));return z/(np.max(np.abs(z))+1e-9)
+          def add(at,x,amp=.2,pan=0):
+           j=round(at*scale*SR); start=max(0,j); off=start-j;n=min(len(x)-off,len(mix)-start)
+           if n<=0:return
+           # Short fades keep each individual cue click-free.
+           x=np.array(x,dtype=np.float32);fade=min(96,len(x)//2)
+           if fade:x[:fade]*=np.linspace(0,1,fade);x[-fade:]*=np.linspace(1,0,fade)
+           mix[start:start+n,0]+=amp*x[off:off+n]*math.sqrt(1-pan);mix[start:start+n,1]+=amp*x[off:off+n]*math.sqrt(1+pan)
+          def impact(at,amp=.23):
+           t=times(.57);f=48*t+45*.095*(1-np.exp(-t/.095));x=.75*np.sin(2*np.pi*f)*np.exp(-t*8)+.25*noise(t,500,3600)*np.exp(-t*22);add(at,x,amp)
+          def whoosh(at,d=.34,amp=.12,pan=0):
+           t=times(d);env=np.sin(np.pi*t/d)**1.5; x=noise(t,300,3900)*env;add(at,x,amp,pan)
+          def pop(at,f=750,amp=.095,pan=0):
+           t=times(.105);x=(.8*np.sin(2*np.pi*(f*t+1400*t*t))+.2*noise(t,1200,6500))*np.exp(-t*36);add(at,x,amp,pan)
+          def tick(at,amp=.05,pan=0):
+           t=times(.038);x=(.6*noise(t,1700,7000)+.4*np.sin(2*np.pi*1500*t))*np.exp(-t*100);add(at,x,amp,pan)
+          def flutter(at,pan=0):
+           t=times(.14);x=noise(t,380,4200)*np.sin(np.pi*t/.14)**2*(.45+.55*np.sin(2*np.pi*27*t)**2);add(at,x,.105,pan)
+          def sweep(at,d=.5):
+           t=times(d);x=(.35*np.sin(2*np.pi*(200*t+1800*t*t))+.65*noise(t,500,4800))*np.sin(np.pi*t/d)**2;add(at,x,.11)
+          def ease(x):
+           x=max(0.,min(1.,x));return x*x*(3-2*x)
+          def inv(x):
+           lo,hi=0.,1.
+           for _ in range(30):
+            m=(lo+hi)/2
+            if ease(m)<x:lo=m
+            else:hi=m
+           return (lo+hi)/2
+          def frame_at(t):return math.ceil(t*scale*30-1e-8)/(30*scale)
+          def ring(at,f=460,amp=.15,pan=0):
+           t=times(.32);ph=f*t+130*(1-np.exp(-t*12))/12;x=(.65*np.sin(2*np.pi*ph)+.25*np.sin(2*np.pi*ph*1.51)+.1*noise(t,400,2800))*np.exp(-t*11);add(at,x,amp,pan)
+          def digit(at,f=1100,amp=.12,pan=0):
+           t=times(.043);ph=f*t+700*t*t;x=(.42*np.sin(2*np.pi*ph)+.36*np.sin(4*np.pi*ph)+.22*noise(t,1600,6800))*np.exp(-t*60);add(at,x,amp,pan)
+          def clock(at,alt=False):
+           t=times(.082);f=760 if alt else 510;x=(.48*np.sin(2*np.pi*f*t)+.52*noise(t,900,4800))*np.exp(-t*54);add(at,x,.15,.15 if alt else -.15)
+          def thud(at,amp=.12,pan=0):
+           t=times(.11);x=.65*np.sin(2*np.pi*(100*t-160*t*t))*np.exp(-t*32)+.35*noise(t,200,1800)*np.exp(-t*36);add(at,x,amp,pan)
+          def servo(at,length,amp=.075):
+           d=length*scale;t=times(d);u=t/d;ph=140*t+330*d*u*u/2;env=np.minimum(1,u*12)*np.minimum(1,(1-u)*12)
+           x=(.62*np.sin(2*np.pi*ph)+.18*np.sin(4*np.pi*ph)+.20*noise(t,300,2000))*env*(.7+.3*np.sin(2*np.pi*23*t)**2);add(at,x,amp)
+          def counter(start,span,goal,rate):
+           # Same smoothstep and rounding as video. Group very rapid digit changes to avoid harsh buzz.
+           finish=start+span/rate; last=None;lastcue=-99
+           for k in range(math.ceil(start*scale*30-1e-8),math.ceil(finish*scale*30)+1):
+            t=k/(30*scale);v=round(goal*ease((t-start)/span*rate))
+            if v!=last and v>0 and t*scale-lastcue>=.045:
+             digit(t,850+700*v/goal,.16,(-1)**k*.17);lastcue=t*scale
+            last=v
+           servo(start,span/rate,.065);pop(frame_at(finish),1050,.19)
+          def mark(at,f=660,amp=.12):pop(frame_at(at),f,amp)
+          B=[0,4,6.8,9.5,12.5,15.4,18.3,21.2,24.5,28.5,32.8,36,40]
+          E=[[.25,.55,.85,1.15,1.45,1.75,2.05],[.3,1.1,1.9],[.25,1.35],[.25,1,1.8],[.3,1.2,2.1],[.25,1.1,2],[.3,1.2,2.1],[.25,.95,1.65,2.35],[.3,1.3,2.3],[.3,.9,1.5,2.1,2.7],[.3,1.1,1.9],[.3,1,1.7,2.4]]
+          def disconnect(at,pan=0):
+           t=times(.24);ph=1100*t-1650*t*t;add(at,(.7*np.sin(2*np.pi*ph)+.3*noise(t,450,4200))*np.exp(-t*14),.14,pan)
+          def paper(at,pan=0):
+           t=times(.22);add(at,noise(t,500,4800)*np.sin(np.pi*t/.22)**2,.11,pan)
+          def radio(at):
+           t=times(.38);add(at,noise(t,800,5000)*np.sin(np.pi*t/.38)**2*(.5+.5*np.sin(2*np.pi*19*t)**2),.12)
+          for i,start in enumerate(B[:-1]):
+           impact(frame_at(start),.19 if i in (0,4,7,9,11) else .105)
+           for j,offset in enumerate(E[i]):
+            at=frame_at(start+offset);pan=(j%3-1)*.22;end=frame_at(start+offset+.48)
+            if i in (0,1,3,6,10):disconnect(at,pan)
+            elif i==2:
+             if j==0:servo(at,.48,.095);mark(end,850,.15)
+             else:disconnect(at);thud(end,.10)
+            elif i==4:digit(at,1100-j*130,.13,pan);clock(frame_at(start+offset+.24),bool(j%2))
+            elif i==5:
+             if j==0:servo(at,.48,.10);thud(end,.14)
+             elif j==1:disconnect(at)
+             else:paper(at);thud(end,.11)
+            elif i==7:paper(at,pan);thud(end,.09,pan)
+            elif i==8:
+             if j==0:paper(at);thud(end,.10)
+             elif j==1:radio(at)
+             else:whoosh(at,.27,.10);pop(end,740,.10)
+            elif i==9:whoosh(at,.32,.08,pan);thud(frame_at(start+offset+.62),.17,pan)
+            else:ring(at,460+j*125,.15,pan);pop(end,850+j*110,.11,pan)
+           if i<11:whoosh(frame_at(B[i+1]-.20),.18,.06)
+          # Gentle peak ceiling for adding voiceover later. No music or narration.
+          peak=float(np.max(np.abs(mix)));limit=10**(-8/20)
+          if peak>limit:mix*=limit/peak
+          with wave.open(a.output,'wb') as w:
+           w.setnchannels(2);w.setsampwidth(2);w.setframerate(SR);w.writeframes(np.int16(np.clip(mix,-1,1)*32767).tobytes())
+          print(f'Synced stereo SFX: {D:g}s; peak {20*math.log10(max(float(np.max(np.abs(mix))),1e-9)):.1f} dBFS')
+          MM_SFX
+          python sfx.py --duration "$DURATION" --output MeanwhileMash_N04_SFX.wav
+          ffmpeg -hide_banner -loglevel warning -y -i visual_only.mp4 -i MeanwhileMash_N04_SFX.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -ar 48000 -shortest -movflags +faststart MeanwhileMash_N04.mp4
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanwhilemash-n04-internet-blackout
+          path: |
+            MeanwhileMash_N04.mp4
+            MeanwhileMash_N04_SFX.wav
+          retention-days: 7

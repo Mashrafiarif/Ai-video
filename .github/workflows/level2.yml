@@ -1,0 +1,293 @@
+name: MeanwhileMash - Level 2 cinematic test
+on:
+  workflow_dispatch:
+    inputs:
+      quality:
+        description: "Start with still, then preview for a five-second video"
+        type: choice
+        default: still
+        options:
+          - still
+          - preview
+          - full
+permissions:
+  contents: read
+jobs:
+  test-render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      QUALITY: ${{ inputs.quality }}
+    steps:
+      - name: Install Blender and video tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y blender ffmpeg fonts-dejavu-core python3-pil
+          blender --version
+      - name: Create original cinematic scene
+        run: |
+          cat > scene.py <<'PYTHON_SCENE'
+          import bpy, math, random, os, sys
+          from mathutils import Vector
+          from math import sin, cos, pi
+          random.seed(22)
+          args=sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else []
+          mode=args[0] if args else 'preview'
+          assert mode in ('preview','full','still')
+          bpy.ops.wm.read_factory_settings(use_empty=True)
+          s=bpy.context.scene
+          s.render.engine='CYCLES'; s.cycles.device='CPU'; s.cycles.samples=12 if mode=='preview' else 32
+          s.cycles.use_denoising=True
+          s.cycles.max_bounces=5; s.cycles.diffuse_bounces=2; s.cycles.glossy_bounces=3
+          s.render.resolution_x=1080 if mode in ('full','still') else 450
+          s.render.resolution_y=1920 if mode in ('full','still') else 800
+          s.render.resolution_percentage=100; s.render.fps=30 if mode=='full' else 24
+          s.frame_start=1; s.frame_end=s.render.fps*5
+          s.render.image_settings.file_format='PNG'; s.render.image_settings.color_mode='RGB'
+          s.render.film_transparent=False
+          try: s.view_settings.view_transform='AgX'
+          except: s.view_settings.view_transform='Filmic'
+          s.view_settings.exposure=.25
+
+          def col(h):
+              v=[int(h[i:i+2],16)/255 for i in (0,2,4)]
+              return tuple(a/12.92 if a<=.04045 else ((a+.055)/1.055)**2.4 for a in v)
+          def mat(n,h,metal=0,rough=.5,em=0,noise=0,scale=25):
+              m=bpy.data.materials.new(n); m.use_nodes=True; p=m.node_tree.nodes.get('Principled BSDF'); c=col(h)
+              p.inputs['Base Color'].default_value=(*c,1); p.inputs['Metallic'].default_value=metal; p.inputs['Roughness'].default_value=rough
+              if em:
+                  p.inputs['Emission Color' if 'Emission Color' in p.inputs else 'Emission'].default_value=(*c,1)
+                  p.inputs['Emission Strength'].default_value=em
+              if noise:
+                  nodes=m.node_tree.nodes; links=m.node_tree.links; tex=nodes.new('ShaderNodeTexNoise'); tex.inputs['Scale'].default_value=scale; tex.inputs['Detail'].default_value=3
+                  bump=nodes.new('ShaderNodeBump'); bump.inputs['Strength'].default_value=noise; bump.inputs['Distance'].default_value=.075
+                  links.new(tex.outputs['Fac'],bump.inputs['Height']); links.new(bump.outputs['Normal'],p.inputs['Normal'])
+              return m
+          asphalt=mat('Fine-grain asphalt','303949',0,.79,noise=.23,scale=155)
+          concrete=mat('Sidewalk aggregate','8F9899',0,.82,noise=.24,scale=48)
+          curb=mat('Concrete edging','C5BEB0',0,.65,noise=.12)
+          white=mat('Painted white','F5F5F5',0,.44); lime=mat('Electric lime technical textile','C6FF00',0,.57,noise=.12,scale=165)
+          charcoal=mat('Midnight technical trousers','101820',0,.63,noise=.12,scale=120)
+          skin=mat('Ceramic mascot','F5F5F5',0,.33); seam=mat('Jacket seam','758D0C',0,.6)
+          carpaint=mat('Metallic copper lacquer','C54F38',.65,.24); car_dark=mat('Carbon trim','101820',.25,.3,noise=.09,scale=100)
+          glass=mat('Smoked blue reflective glazing','192D44',.55,.13); tire=mat('Tire rubber','12151A',0,.77,noise=.2,scale=95)
+          alloy=mat('Machined alloy','AAB4BD',.83,.23); red=mat('Rear LED','FF303A',.1,.23,em=4); head=mat('Headlamp LED','CFEAFF',.15,.2,em=5)
+          roadline=mat('Warm lane paint','F5D879',0,.62); bark=mat('Palm bark','72594B',0,.8,noise=.5,scale=30)
+          leaves=[mat('Palm leaf '+str(i),h,0,.57) for i,h in enumerate(['537C60','376B4E','71945B'])]
+          blue=mat('Emergency blue','366AFF',0,.24,em=7); police_red=mat('Emergency red','FF303A',0,.24,em=7)
+          wallm=[mat('Facade '+str(i),h,0,.68,noise=.12) for i,h in enumerate(['A8B8BC','E4BDA7','8C99AA','D5C8B5','8292A4'])]
+          windowm=[glass,mat('Warm lit interior','FFD2A2',.05,.4,em=.9),mat('Cool lit interior','A9D8E7',.1,.35,em=.55)]
+
+          def finish(o,m,bevel=0,smooth=False):
+              o.data.materials.append(m)
+              if bevel:
+                  q=o.modifiers.new('Soft machined edges','BEVEL'); q.width=bevel; q.segments=3
+                  q=o.modifiers.new('Weighted normals','WEIGHTED_NORMAL')
+              if smooth:
+                  for p in o.data.polygons:p.use_smooth=True
+              return o
+
+          def box(n,loc,dim,m,b=.025):
+              bpy.ops.mesh.primitive_cube_add(size=1,location=loc); o=bpy.context.object; o.name=n; o.dimensions=dim; bpy.ops.object.transform_apply(location=False,rotation=False,scale=True);return finish(o,m,b)
+          def mesh(n,verts,faces,m,smooth=False,bevel=0):
+              d=bpy.data.meshes.new(n);d.from_pydata(verts,[],faces);d.update();o=bpy.data.objects.new(n,d);s.collection.objects.link(o);return finish(o,m,bevel,smooth)
+          def ell(n,loc,scale,m,segments=24):
+              bpy.ops.mesh.primitive_uv_sphere_add(segments=segments,ring_count=16,location=loc);o=bpy.context.object;o.name=n;o.scale=scale;return finish(o,m,0,True)
+          def cyl(n,loc,rad,dep,m,axis='z',verts=48):
+              bpy.ops.mesh.primitive_cylinder_add(vertices=verts,radius=rad,depth=dep,location=loc,rotation=(pi/2,0,0) if axis=='y' else (0,0,0));o=bpy.context.object;o.name=n;return finish(o,m,.015,True)
+          def beam(n,a,b,r,m,r2=None):
+              a,b=Vector(a),Vector(b);d=b-a
+              bpy.ops.mesh.primitive_cone_add(vertices=20,radius1=r,radius2=r if r2 is None else r2,depth=d.length,location=(a+b)/2);o=bpy.context.object;o.name=n;o.rotation_euler=d.to_track_quat('Z','Y').to_euler();return finish(o,m,0,True)
+          def path(n,pts,rad,m):
+              d=bpy.data.curves.new(n,'CURVE');d.dimensions='3D';d.bevel_depth=rad;d.bevel_resolution=2;sp=d.splines.new('POLY');sp.points.add(len(pts)-1)
+              for a,p in zip(sp.points,pts):a.co=(*p,1)
+              o=bpy.data.objects.new(n,d);s.collection.objects.link(o);o.data.materials.append(m);return o
+
+          # Entire original scene uses procedural geometry, no third-party models.
+          box('Road',(0,0,-.12),(90,14,.23),asphalt,.0)
+          for side in (-1,1):
+              box('Sidewalk',(0,side*5.35,.02),(90,3,.24),concrete,.04)
+              box('Continuous curb',(0,side*3.86,.10),(90,.22,.30),curb,.035)
+              for x in range(-24,31,3):
+                  box('Pavement expansion joint',(x,side*5.35,.147),(.024,2.65,.005),asphalt,0)
+          for x in range(-40,41,5):box('Lane dash',(x,0,.006),(2.3,.09,.012),roadline,.006)
+          for y in (-3.2,3.2):box('Road edge stripe',(0,y,.007),(90,.065,.012),white,0)
+          # Art-deco street frontage and distant skyline.
+          for i,x in enumerate(range(-24,35,6)):
+              y=8.2+random.uniform(0,.9); h=random.uniform(4.6,8.8); w=5.65
+              box('Art deco building',(x,y,h/2),(w,4.3,h),wallm[i%len(wallm)],.08)
+              box('Roof cornice',(x,y,h+.02),(w+.18,4.48,.23),curb,.025)
+              box('Ground floor band',(x,y-2.19,1.8),(w+.05,.16,.23),white,.016)
+              for j in range(4):
+                  xx=x-2.03+j*1.35
+                  box('Shop glazing',(xx,y-2.17,.92),(1.1,.08,1.44),windowm[0],.025)
+                  for z in [2.65+1.35*k for k in range(int((h-2.9)/1.35)+1)]:
+                      if z+.55>h:continue
+                      box('Window casing',(xx,y-2.18,z),(1.03,.14,.94),curb,.035)
+                      box('Window pane',(xx,y-2.27,z),(.82,.035,.76),random.choices(windowm,[.8,.15,.05])[0],.008)
+                      box('Window mullion',(xx,y-2.30,z),(.035,.025,.76),alloy,0)
+              for xx in (x-2.7,x+2.7):box('Vertical facade pilaster',(xx,y-2.22,h/2),(.15,.19,h-.1),white,.02)
+          for x in range(-36,47,7):
+              h=random.uniform(10,20);y=19+random.uniform(0,7)
+              box('Distant tower',(x,y,h/2),(5.9,5.2,h),wallm[random.randrange(5)],.05)
+              for z in range(2,int(h)-1,2):box('Tower glass strip',(x,y-2.61,z),(4.9,.025,.55),glass,0)
+          # Palm trees: curved tapering trunk, individual folded fronds and leaflets.
+          def palm(x,y,h):
+              base=Vector((x,y,.18)); pts=[]
+              for i in range(9):
+                  t=i/8;pts.append(base+Vector((.45*t*t,.14*t,h*t)))
+              for i in range(8):beam('Palm trunk',pts[i],pts[i+1],.18-.065*i/8,bark,.18-.065*(i+1)/8)
+              top=pts[-1]
+              for i in range(10):
+                  a=2*pi*i/10+random.uniform(-.14,.14);l=random.uniform(1.65,2.45);u=Vector((cos(a),sin(a),0));v=Vector((-sin(a),cos(a),0))
+                  p=[]
+                  for j in range(9):
+                      t=j/8;p.append(top+u*(l*t)+Vector((0,0,.70*sin(pi*t)-.65*t*t)))
+                  path('Palm frond spine',p,.018,leaves[i%3]);verts=[];faces=[]
+                  for j in range(1,8):
+                      t=j/8;w=.35*sin(pi*t)**.7
+                      for side in (-1,1):
+                          root=p[j];tip=root+u*.27+v*(side*w)+Vector((0,0,-.11));edge=root+u*.14
+                          k=len(verts);verts.extend([tuple(root),tuple(tip),tuple(edge),tuple(root+u*.08+v*side*w*.42+Vector((0,0,.035)))]);faces.extend([(k,k+1,k+3),(k+1,k+2,k+3)])
+                  mesh('Palm leaflets',verts,faces,leaves[i%3])
+          for x in [-19,-11,-4,5,13,21,29]:palm(x,4.6,random.uniform(5,7))
+          for x in [-8,9,25]:
+              beam('Street light pole',(x,4.05,.15),(x,4.05,5),.065,car_dark)
+              path('Curved streetlight',[(x,4.05,4.65),(x,3.98,5.05),(x,3.65,5.25),(x,3.08,5.25)],.055,car_dark)
+              box('Streetlight housing',(x,3.1,5.20),(.31,.63,.13),car_dark,.05);box('Lamp',(x,3.1,5.12),(.23,.48,.025),head,.02)
+          # Sculpted sports-car shell: longitudinal sections, wheel recesses and a separate glasshouse.
+          rings=[(-2.34,.82,.47,.69),(-2.15,.94,.34,.84),(-1.62,1.02,.29,.98),(-.95,1.00,.29,.93),(0,.95,.30,.90),(.90,1.00,.29,.98),(1.57,1.04,.30,1.02),(2.12,.97,.34,.89),(2.29,.83,.50,.76)]
+          vs=[]
+          for x,w,lo,hi in rings:
+              vs.extend([(x,-w*.82,lo),(x,-w,lo+.16),(x,-w,hi-.16),(x,-w*.73,hi),(x,w*.73,hi),(x,w,hi-.16),(x,w,lo+.16),(x,w*.82,lo)])
+          fs=[tuple(reversed(range(8))),tuple(range((len(rings)-1)*8,len(rings)*8))]
+          for i in range(len(rings)-1):
+              for j in range(8):fs.append((i*8+j,i*8+(j+1)%8,(i+1)*8+(j+1)%8,(i+1)*8+j))
+          body=mesh('Sculpted sports car body',vs,fs,carpaint)
+          # Recalculate normals before cutting wheel arches.
+          bpy.ops.object.select_all(action='DESELECT');bpy.context.view_layer.objects.active=body;body.select_set(True)
+          bpy.ops.object.mode_set(mode='EDIT');bpy.ops.mesh.select_all(action='SELECT');bpy.ops.mesh.normals_make_consistent(inside=False);bpy.ops.object.mode_set(mode='OBJECT');body.select_set(False)
+          for x in (-1.43,1.43):
+              for side in (-1,1):
+                  cut=cyl('Wheel arch cutter',(x,side*.97,.43),.48,.62,tire,'y');cut.modifiers.clear()
+                  q=body.modifiers.new('Wheel arch','BOOLEAN');q.operation='DIFFERENCE';q.object=cut
+                  bpy.context.view_layer.objects.active=body;bpy.ops.object.modifier_apply(modifier=q.name);bpy.data.objects.remove(cut,do_unlink=True)
+          q=body.modifiers.new('Rounded body creases','BEVEL');q.width=.055;q.segments=4;q=body.modifiers.new('Body weighted normals','WEIGHTED_NORMAL')
+          # glasshouse surfaces: windshield, roof, rear glass, side glazing.
+          A=(-.95,-.77,.92);B=(-.95,.77,.92);C=(-.36,-.59,1.43);D=(-.36,.59,1.43);E=(.57,-.56,1.46);F=(.57,.56,1.46);G=(1.22,-.72,.99);H=(1.22,.72,.99)
+          mesh('Front windscreen',[A,B,D,C],[(0,1,2,3)],glass);mesh('Rear screen',[E,F,H,G],[(0,1,2,3)],glass)
+          mesh('Side window L',[A,C,E,G],[(0,1,2,3)],glass);mesh('Side window R',[B,H,F,D],[(0,1,2,3)],glass)
+          mesh('Roof',[C,D,F,E],[(0,1,2,3)],carpaint)
+          for p,q in [(A,C),(B,D),(C,D),(C,E),(D,F),(E,F),(E,G),(F,H),(A,G),(B,H)]:path('Window frame',[p,q],.035,carpaint)
+          for side in (-1,1):
+              path('Door shut line',[(-.88,side*1.002,.72),(-.78,side*.99,.40),(.66,side*.99,.40),(.77,side*1.01,.80)],.009,car_dark)
+              box('Door handle',(.47,side*1.015,.79),(.18,.035,.035),alloy,.014)
+              ell('Side mirror',(-.8,side*1.01,1.02),(.18,.12,.075),carpaint)
+              box('Side skirt',(0,side*.98,.29),(1.6,.14,.10),car_dark,.025)
+              for x in (-1.43,1.43):
+                  cyl('Performance tire',(x,side*.96,.44),.425,.29,tire,'y');cyl('Rim',(x,side*1.12,.44),.305,.035,alloy,'y');cyl('Rim inner',(x,side*1.143,.44),.255,.025,car_dark,'y')
+                  for i in range(7):
+                      a=i*2*pi/7;sp=box('Alloy spoke',(x+.17*cos(a),side*1.16,.44+.17*sin(a)),(.245,.035,.055),alloy,.009);sp.rotation_euler[1]=-a
+                  cyl('Hub',(x,side*1.18,.44),.09,.045,alloy,'y')
+                  for i in range(20):
+                      a=i*2*pi/20;sp=box('Tread shoulder',(x+.405*cos(a),side*1.087,.44+.405*sin(a)),(.07,.053,.018),car_dark,.003);sp.rotation_euler[1]=pi/2-a
+              box('Headlamp',(-2.25,side*.59,.72),(.14,.51,.10),head,.03)
+              box('Rear LED',(2.22,side*.60,.76),(.12,.49,.075),red,.015)
+          box('Front intake',(-2.30,0,.47),(.12,.88,.18),car_dark,.035)
+          for i in range(7):box('Intake grille',(-2.37,0,.40+i*.022),(.035,.78,.007),alloy,0)
+          box('Front splitter',(-2.23,0,.30),(.47,1.72,.08),car_dark,.03)
+          box('Rear diffuser',(2.18,0,.32),(.45,1.64,.11),car_dark,.025)
+          # Refined, faceless brand mascot: tailored jacket, seam details, tapered limbs, sneakers.
+          mx,my=-2.95,.05
+
+          def P(x,y,z):return (mx+x,my+y,z)
+          # mascot faces the camera roughly toward negative y
+          for side in (-1,1):
+              x=side*.16
+              beam('Trouser upper',P(x,0,.99),P(x*1.15,.015,.56),.13,charcoal,.105)
+              ell('Knee',P(x*1.15,.015,.56),(.105,.10,.12),charcoal)
+              beam('Trouser lower',P(x*1.15,.015,.56),P(x*1.3,0,.17),.105,charcoal,.076)
+              box('Sneaker sole',P(x*1.3,-.075,.065),(.23,.39,.09),white,.045)
+              ell('Sneaker upper',P(x*1.3,-.078,.13),(.116,.193,.09),charcoal)
+              box('Shoe lime accent',P(x*1.3,-.19,.12),(.17,.08,.035),lime,.012)
+          ell('Hip',P(0,0,.98),(.31,.18,.19),charcoal)
+          # Jacket silhouette mesh with cross-sectional elliptical torso, smoothly beveled profile.
+          verts=[];sections=[(1.02,.28,.168),(1.12,.29,.18),(1.30,.31,.19),(1.50,.35,.19),(1.61,.28,.15),(1.64,.16,.115)]
+          for z,rx,ry in sections:
+              for j in range(24):a=2*pi*j/24;verts.append(P(rx*cos(a),ry*sin(a),z))
+          faces=[tuple(reversed(range(24))),tuple(range((len(sections)-1)*24,len(sections)*24))]
+          for i in range(len(sections)-1):
+              for j in range(24):faces.append((i*24+j,i*24+(j+1)%24,(i+1)*24+(j+1)%24,(i+1)*24+j))
+          mesh('Tailored lime jacket',verts,faces,lime,True)
+          path('Center zipper',[P(0,-.169,1.02),P(0,-.181,1.12),P(0,-.192,1.3),P(0,-.192,1.5),P(0,-.12,1.64)],.009,charcoal)
+          for side in (-1,1):
+              path('Pocket welt',[P(side*.12,-.162,1.17),P(side*.235,-.10,1.25)],.012,seam)
+              sh=P(side*.31,0,1.51);elb=P(side*.41,-.02,1.23);wr=P(side*.38,-.09,1.02)
+              ell('Jacket shoulder',sh,(.14,.15,.15),lime);beam('Sleeve upper',sh,elb,.12,lime,.095);ell('Sleeve elbow',elb,(.096,.095,.11),lime);beam('Sleeve lower',elb,wr,.10,lime,.075);ell('Glove cuff',wr,(.08,.08,.07),charcoal);ell('Ceramic hand',P(side*.38,-.10,.94),(.075,.066,.115),skin)
+          ell('Neck',P(0,0,1.64),(.105,.105,.115),skin);ell('Jacket collar',P(0,0,1.62),(.16,.14,.065),charcoal)
+          head_obj=ell('Faceless ceramic head',P(0,-.012,1.88),(.184,.16,.226),skin,32)
+          # Distant emergency vehicle is deliberately background-only.
+          px,py=9.2,1.75
+          box('Distant patrol car lower',(px,py,.48),(1.7,.82,.40),white,.13);box('Distant patrol cabin',(px,py,.83),(.85,.70,.42),glass,.10)
+          for yy in (-.38,.38):
+              for xx in (-.52,.52):cyl('Patrol wheel',(px+xx,py+yy,.28),.22,.12,tire,'y')
+          box('Emergency lights base',(px,py,1.06),(.24,.78,.08),car_dark,.02);box('Blue light',(px,py-.20,1.13),(.2,.32,.08),blue,.018);box('Red light',(px,py+.20,1.13),(.2,.32,.08),police_red,.018)
+          # Cinematic lighting: physical sky, broad key and cool fill.
+          w=bpy.data.worlds.new('Sunset environment');s.world=w;w.use_nodes=True;nt=w.node_tree;sky=nt.nodes.new('ShaderNodeTexSky');sky.sky_type='NISHITA';sky.sun_elevation=math.radians(9);sky.sun_rotation=math.radians(225);sky.sun_disc=False;sky.air_density=1.1;sky.dust_density=2.4;nt.links.new(sky.outputs['Color'],nt.nodes.get('Background').inputs['Color']);nt.nodes.get('Background').inputs['Strength'].default_value=.23
+
+          def light(n,typ,loc,energy,color,target=None,size=4):
+              d=bpy.data.lights.new(n,typ);d.energy=energy;d.color=color;o=bpy.data.objects.new(n,d);s.collection.objects.link(o);o.location=loc
+              if typ=='AREA':d.shape='DISK';d.size=size
+              if target is not None:o.rotation_euler=(Vector(target)-o.location).to_track_quat('-Z','Y').to_euler()
+              return o
+          sun=light('Warm sunset key','SUN',(-8,4,8),2.5,(1,.53,.30),(0,0,0));sun.data.angle=math.radians(9)
+          light('Large cool reflection softbox','AREA',(-3,-5,6),800,(.61,.78,1),(0,0,1),6)
+          light('Warm rim','AREA',(2,4,5),1100,(1,.43,.20),(-1,0,1),5)
+          for pos,c in [((px,py-.2,1.16),(.10,.23,1)),((px,py+.2,1.16),(1,.02,.04))]:
+              o=light('Pulsing patrol light','POINT',pos,12,c);o.data.shadow_soft_size=.18
+              for f in range(1,s.frame_end+1,6):o.data.energy=18 if ((f//6)+(c[0]>.5))%2 else 1;o.data.keyframe_insert('energy',frame=f)
+          # Camera tracks in toward the hero. Wide enough for car + character, vertical composition.
+          d=bpy.data.cameras.new('Cinematic camera');cam=bpy.data.objects.new('Cinematic camera',d);s.collection.objects.link(cam);s.camera=cam;d.lens=36;d.sensor_fit='HORIZONTAL';d.dof.use_dof=True;d.dof.aperture_fstop=5.6
+          focus=bpy.data.objects.new('Hero focus',None);s.collection.objects.link(focus);focus.location=(-1.05,0,.95);d.dof.focus_object=focus
+          for f,loc,target in [(1,(-7.9,-9.4,2.85),(-.9,.25,1.25)),(s.frame_end,(-7.25,-8.55,2.65),(-1.0,.15,1.23))]:
+              cam.location=loc;cam.rotation_euler=(Vector(target)-cam.location).to_track_quat('-Z','Y').to_euler();cam.keyframe_insert('location',frame=f);cam.keyframe_insert('rotation_euler',frame=f)
+          # Compositor: restrained bloom for lit windows and headlights.
+          s.use_nodes=True;nt=s.node_tree;nt.nodes.clear();r=nt.nodes.new('CompositorNodeRLayers');g=nt.nodes.new('CompositorNodeGlare');g.glare_type='FOG_GLOW';g.quality='MEDIUM';g.threshold=1.8;g.size=8;g.mix=-.88;out=nt.nodes.new('CompositorNodeComposite');nt.links.new(r.outputs['Image'],g.inputs['Image']);nt.links.new(g.outputs['Image'],out.inputs['Image'])
+          os.makedirs('frames',exist_ok=True)
+          if mode=='still':
+              s.frame_set(1);s.render.filepath=os.path.abspath('frames/0001.png');bpy.ops.render.render(write_still=True)
+          else:
+              s.render.filepath=os.path.abspath('frames')+'/';bpy.ops.render.render(animation=True)
+          PYTHON_SCENE
+          blender -b -t 0 --python-exit-code 1 --python scene.py -- "$QUALITY"
+      - name: Brand and export
+        run: |
+          mkdir -p output
+          /usr/bin/python3 - <<'PYTHON_BRAND'
+          import os
+          from PIL import Image, ImageDraw, ImageFont
+          first=Image.open('frames/0001.png').convert('RGBA')
+          w,h=first.size
+          layer=Image.new('RGBA',(w,h));d=ImageDraw.Draw(layer)
+          font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',round(w*.038))
+          x,y=round(w*.055),round(h*.055)
+          # Subtle brand wordmark, no intrusive opening or title card.
+          d.text((x+1,y+1),'meanwhilemash',font=font,fill=(16,24,32,190))
+          d.text((x,y),'meanwhile',font=font,fill='#F5F5F5')
+          d.text((x+int(d.textlength('meanwhile',font=font)),y),'mash',font=font,fill='#C6FF00')
+          layer.save('branding.png')
+          Image.alpha_composite(first,layer).convert('RGB').save('output/MeanwhileMash_Level2_Preview.png')
+          PYTHON_BRAND
+          if [ "$QUALITY" != "still" ]; then
+            fps=24
+            if [ "$QUALITY" = "full" ]; then fps=30; fi
+            ffmpeg -hide_banner -loglevel warning -y -framerate "$fps" -i frames/%04d.png -i branding.png -filter_complex '[0:v][1:v]overlay=0:0:format=auto,format=yuv420p' -c:v libx264 -preset fast -crf 17 -an -movflags +faststart output/MeanwhileMash_Level2_Test.mp4
+            ffprobe -v error -show_entries format=duration,size -show_entries stream=width,height,r_frame_rate -of json output/MeanwhileMash_Level2_Test.mp4
+          fi
+      - name: Upload test result
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeanwhileMash-Level2-${{ inputs.quality }}
+          path: output/
+          retention-days: 3
+          if-no-files-found: error

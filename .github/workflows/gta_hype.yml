@@ -1,0 +1,187 @@
+name: MeanwhileMash - GTA 6 Hype
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Video duration (seconds); match your voiceover'
+        required: true
+        default: '40'
+      quality:
+        description: 'Render resolution'
+        type: choice
+        options:
+          - full
+          - preview
+        default: full
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install renderer
+        run: |
+          python -m pip install pillow numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Render GTA 6 Hype
+        env:
+          DURATION: ${{ inputs.duration }}
+          QUALITY: ${{ inputs.quality }}
+        run: |
+          cat > render.py <<'MM_RENDERER'
+          import argparse, math, random, subprocess
+          from functools import lru_cache
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont, ImageFilter
+          p=argparse.ArgumentParser(); p.add_argument('--width',type=int,default=1080); p.add_argument('--fps',type=int,default=30); p.add_argument('--output',default='MeanwhileMash_GTA_Hype.mp4'); p.add_argument('--still',type=float); p.add_argument('--duration',type=float,default=40); a=p.parse_args()
+          W=a.width; H=W*16//9; H-=H%2; S=W/720; FPS=a.fps; D=a.duration
+          L='#C6FF00'; WHITE='#F5F5F5'; SLATE='#64748B'; BG='#101820'; DIM='#9EABB4'; BORDER='#35434B'; PANEL='#19242C'
+          @lru_cache(None)
+          def font(n,b=True):return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans'+('-Bold' if b else '')+'.ttf',max(1,round(n*S)))
+          def pt(x,y):return (round(x*S),round(y*S))
+          def box(d,x,y,w,h,c,r=0,stroke=None,sw=1):d.rounded_rectangle([pt(x,y),pt(x+w,y+h)],radius=round(r*S),fill=c,outline=stroke,width=max(1,round(sw*S)))
+          def line(d,pts,c,w=1):d.line([pt(*q) for q in pts],fill=c,width=max(1,round(w*S)),joint='curve')
+          def poly(d,pts,c):d.polygon([pt(*q) for q in pts],fill=c)
+          def ellipse(d,x,y,rx,ry,c=None,stroke=None,sw=1):d.ellipse([pt(x-rx,y-ry),pt(x+rx,y+ry)],fill=c,outline=stroke,width=max(1,round(sw*S)))
+          def tx(d,x,y,t,n=32,c=WHITE,anchor='mm',b=True,maxw=650):
+           while font(n,b).getlength(t)>maxw*S and n>10:n-=1
+           d.text(pt(x,y),t,font=font(n,b),fill=c,anchor=anchor)
+          def ease(t): t=max(0.,min(1.,t)); return t*t*(3-2*t)
+          def mix(x,y,r):return x+(y-x)*r
+          def clamp(t):return max(0,min(1,t))
+          def rgb(h):return tuple(int(h[i:i+2],16) for i in (1,3,5))
+          def blend(a,b,v):return tuple(round(mix(x,y,v)) for x,y in zip(rgb(a),rgb(b)))
+          y,x=np.ogrid[0:H,0:W]; rr=np.sqrt(((x/W-.50)*1.35)**2+((y/H-.53)*1.1)**2); g=np.clip(1-rr*1.65,0,1)**1.7
+          back=Image.fromarray(np.uint8(np.array([12,18,24])+g[:,:,None]*np.array([18,27,29])),'RGB')
+          del x,y,rr,g
+          # Anti-aliased-looking dimensional shapes with graphic highlights, not ray tracing.
+          def cuboid(d,x,y,w,h,depth,green=False):
+           c1,c2,c3=('#A8D900','#78A400','#D9FF69') if green else ('#55646D','#34434D','#87969C')
+           poly(d,[(x,y),(x+w,y),(x+w,y-h),(x,y-h)],c1)
+           poly(d,[(x+w,y),(x+w+depth,y-depth*.48),(x+w+depth,y-h-depth*.48),(x+w,y-h)],c2)
+           poly(d,[(x,y-h),(x+w,y-h),(x+w+depth,y-h-depth*.48),(x+depth,y-h-depth*.48)],c3)
+           line(d,[(x+1,y-h),(x+w,y-h),(x+w+depth,y-h-depth*.48)],'#D4E2D5' if green else '#A1ACAE',1)
+          def gamecase(d,x,y,w,h,accent=False,label=''):
+           # generic game packaging, no official logo, art or interface
+           dep=w*.11; box(d,x-dep,y+dep*.3,w+dep,h,'#0A1116',10)
+           poly(d,[(x,y),(x+dep,y-dep*.45),(x+w+dep,y-dep*.45),(x+w,y)],'#9AA8AF' if not accent else '#D8FF75')
+           poly(d,[(x+w,y),(x+w+dep,y-dep*.45),(x+w+dep,y+h-dep*.45),(x+w,y+h)],'#304049' if not accent else '#658800')
+           box(d,x,y,w,h,'#28363E' if not accent else '#91C000',7)
+           box(d,x+6,y+6,w-12,h-12,'#203039' if not accent else '#14211D',5)
+           # tiny abstract skyline; intentionally not a game cover
+           for k in range(5):
+            bh=(.13+(k*7%5)*.045)*h; bx=x+10+k*(w-20)/5; bw=(w-20)/5-2
+            box(d,bx,y+h*.68-bh,bw,bh,'#45565D' if not accent else '#556130',1)
+           box(d,x+10,y+h*.75,w-20,3,L if accent else '#71828B',1)
+           if label:tx(d,x+w/2,y+h*.28,label,max(12,int(w*.22)),L if accent else WHITE,maxw=w-15)
+          def grid(d):
+           for yy in range(360,1020,42):line(d,[(36,yy),(684,yy)],'#24323A')
+           for xx in range(36,685,42):line(d,[(xx,360),(xx,990)],'#24323A')
+          def floor(d,cx=360,yy=894):
+           for k in range(-5,6):line(d,[(cx+k*21,yy-100),(cx+k*100,yy+95)],'#29383F')
+           for z in [0,18,43,75,115]:line(d,[(55,yy+z),(665,yy+z)],'#29383F')
+          def shadow(d,x,y,w):ellipse(d,x,y,w,20,'#0C141A');ellipse(d,x,y,w*.75,11,'#0A1116')
+          def pill(d,x,y,t,active=False):box(d,x,y,116,33,'#293A35' if active else PANEL,16, '#4E6340' if active else BORDER);tx(d,x+58,y+16,t,13,L if active else DIM)
+          def number(d,t,sub):tx(d,360,259,t,91,L,maxw=640);tx(d,360,323,sub,24,WHITE,maxw=630)
+          def play(d,x,y,r,active=True):
+           ellipse(d,x,y,r,r,'#24363A',L if active else SLATE,2)
+           poly(d,[(x-r*.20,y-r*.40),(x-r*.20,y+r*.40),(x+r*.48,y)],L if active else WHITE)
+          def person(d,x,y,s,green=False):
+           c=L if green else '#6C7A83';ellipse(d,x,y-24*s,9*s,9*s,c);box(d,x-10*s,y-12*s,20*s,28*s,c,6*s);line(d,[(x-5*s,y+14*s),(x-8*s,y+36*s)],c,7*s);line(d,[(x+5*s,y+14*s),(x+8*s,y+36*s)],c,7*s)
+          def cash(d,x,y,w,h,active=True):
+           cuboid(d,x,y,w,h,14,active)
+           for j in range(1,5):line(d,[(x+1,y-h*j/5),(x+w-1,y-h*j/5)],'#5E8200' if active else '#334149')
+           box(d,x+w*.43,y-h,w*.16,h,'#D6DCCE' if active else '#96A0A2',1)
+          # Reference timeline for the previously supplied narration, based on an estimated read.
+          # All timings are scaled by --duration, so users can match an overall voiceover length.
+          B=[0,4,10,18,25,31,36,40]
+          HEAD=['THE GTA 6 HYPE','A GLOBAL FRANCHISE','THE GTA V LEGACY','THE 13-YEAR WAIT','TRAILER 01','TRAILER 02','WHY THE HYPE?']
+          FOOT=['A phenomenon built over years.','Worldwide franchise units sold-in.','A historic entertainment launch.','Between the two mainline releases.','YouTube views in the first 24 hours.','Across platforms in the first 24 hours.','Legacy. Anticipation. Global attention.']
+          def frame(time):
+           t=time*40/D;i=next((j for j in range(7) if t<B[j+1]),6);q=clamp((t-B[i])/(B[i+1]-B[i])); e=ease(q); im=back.copy();d=ImageDraw.Draw(im)
+           # editorial frame; preserve platform safe area
+           tx(d,42,53,'meanwhile',24,WHITE,'lm'); tx(d,42+font(24).getlength('meanwhile')/S,53,'mash',24,L,'lm');tx(d,678,53,'GAMING / 03',14,DIM,'rm');line(d,[(42,83),(678,83)],BORDER)
+           pill(d,42,108,f'0{i+1} / 07',True);tx(d,678,125,'THE NUMBERS BEHIND IT',13,DIM,'rm');tx(d,360,177,HEAD[i],36,WHITE,maxw=650)
+           if i==0:
+            tx(d,360,250,'GTA 6',102,L);tx(d,360,332,'WHY THE WORLD COULDN’T WAIT',23,WHITE)
+            floor(d,360,878);shadow(d,360,874,218)
+            for j in range(8):
+             xx=70+j*72;hh=88+(j*37%140);cuboid(d,xx,824,54,hh,16,False)
+            for k in range(5):
+             r=118+k*33+12*math.sin(q*math.tau);ellipse(d,360,620,r,r*.62,None,'#3E5542',1)
+            sc=1+.045*math.sin(q*math.pi);ww=154*sc;hh=228*sc;gamecase(d,360-ww/2,650-hh/2,ww,hh,True,'VI')
+            for j in range(14): person(d,91+j*41,911,0.73,j in (3,7,10))
+           elif i==1:
+            v=round(475*ease(q*2.2)); number(d,f'{v}M'+('+' if v==475 else ''),'FRANCHISE UNITS SOLD-IN')
+            grid(d); cx,cy,r=360,648,228;ellipse(d,cx,cy,r,r,'#24343C','#566B72',2)
+            for k in [-2,-1,0,1,2]:
+             dy=k*69;rx=math.sqrt(r*r-dy*dy);ellipse(d,cx,cy+dy,rx,13,None,'#425861',1)
+            for k in range(4):ellipse(d,cx,cy,30+60*k,r,None,'#4C6167',1)
+            for j in range(55):
+             z=random.Random(j+40);xx=z.uniform(-1,1);yy=z.uniform(-1,1)
+             if xx*xx+yy*yy>.88:continue
+             if j/55<ease(q*1.7):ellipse(d,cx+xx*r,cy+yy*r,5,5,L)
+            box(d,116,910,488,54,PANEL,12,BORDER);tx(d,360,937,'WORLDWIDE  /  SEPTEMBER 2026',19,DIM)
+           elif i==2:
+            if q<.49:
+             v=round(230*ease(q*5));number(d,f'{v}M'+('+' if v==230 else ''),'GTA V UNITS SOLD-IN')
+             floor(d,360,882);shadow(d,360,865,210)
+             for j in range(5):
+              xx=106+j*101;y=570+(j%2)*28;gamecase(d,xx,y,91,190,j==2,'V')
+             tx(d,360,923,'ONE GAME. HUNDREDS OF MILLIONS.',21,DIM)
+            else:
+             number(d,'$1 BILLION','RETAIL SALES MILESTONE');floor(d,360,881)
+             for row in range(3):
+              for k in range(5):
+               j=row*5+k;h=(45+(j*31%115))*ease((q-.49)*4);cash(d,93+k*100+row*7,851-row*47,78,max(4,h),j%3!=0)
+             tx(d,360,930,'RECORD-SETTING SPEED AT LAUNCH',20,WHITE)
+           elif i==3:
+            number(d,'13 YEARS','2013 TO 2026');grid(d);x0,x1=92,628;y0=668
+            line(d,[(x0,y0),(x1,y0)],'#52616A',5);line(d,[(x0,y0),(mix(x0,x1,ease(q*1.6)),y0)],L,5)
+            for j in range(14):
+             xx=mix(x0,x1,j/13);ellipse(d,xx,y0,6,6,L if j<=13*ease(q*1.6) else SLATE)
+            for j,yr in enumerate([2013,2016,2019,2022,2026]):
+             xx=mix(x0,x1,(yr-2013)/13);tx(d,xx,y0+40,str(yr),17,WHITE)
+            gamecase(d,74,445,116,161,False,'V');gamecase(d,518,445,116,161,True,'VI')
+            yr=2013+int(13*ease(q*1.7));box(d,245,772,230,112,PANEL,18,BORDER);tx(d,360,826,str(yr),65,L)
+            tx(d,360,942,'A GENERATION OF ANTICIPATION',20,DIM)
+           elif i in (4,5):
+            goal=93 if i==4 else 475;v=round(goal*ease(q*2.1));number(d,f'{v}M'+('+' if v==goal else ''),'VIEWS IN 24 HOURS');grid(d)
+            play(d,360,494,65);tx(d,360,584,'YOUTUBE ONLY' if i==4 else 'ACROSS PLATFORMS',19,DIM)
+            # fixed common scale, no implied unique viewers
+            for j,(name,val) in enumerate([('TRAILER 1',93),('TRAILER 2',475)] if i==5 else [('TRAILER 1',93)]):
+             yy=683+j*111;tx(d,91,yy-22,name,17,WHITE,'lm');box(d,90,yy,540,35,'#27373D',8)
+             amount=val/475*(ease(q*2.1) if (i==4 or j==1) else 1);box(d,90,yy,max(2,540*amount),35,L if (i==4 or j==1) else SLATE,8);tx(d,630,yy-22,f'{val}M+',20,L if (i==4 or j==1) else DIM,'rm')
+            tx(d,360,930,'VIEWS ARE NOT UNIQUE VIEWERS',19,DIM)
+           else:
+            tx(d,360,257,'THE PERFECT STORM',43,L)
+            for j,(h,n,s) in enumerate([('LEGACY','475M+','franchise units'),('WAIT','13 YEARS','between releases'),('ATTENTION','475M+','trailer 2 views')]):
+             yy=405+j*160; f=ease((q-j*.12)*3);xx=mix(83,60,f);box(d,xx,yy,600,132,'#202E34',16,BORDER);box(d,xx+15,yy+16,6,100,L,3);tx(d,xx+39,yy+28,h,17,DIM,'lm');tx(d,xx+39,yy+76,n,48,L,'lm',maxw=305);tx(d,xx+567,yy+76,s,20,WHITE,'rm',maxw=230)
+            tx(d,360,944,'CURIOSITY WITHOUT LIMITS.',19,WHITE)
+           # Footer: plain fact label and progress; no voice captions burned in.
+           box(d,42,1014,636,83,'#162129',12,BORDER);tx(d,61,1041,FOOT[i],20,WHITE,'lm',maxw=594);tx(d,61,1071,'SOURCE: TAKE-TWO / ROCKSTAR GAMES',13,DIM,'lm');line(d,[(42,1135),(678,1135)],BORDER,3);line(d,[(42,1135),(42+636*clamp(t/40),1135)],L,3)
+           return im
+          if a.still is not None:frame(a.still).save(a.output)
+          else:
+           cmd=['ffmpeg','-hide_banner','-loglevel','warning','-y','-f','rawvideo','-pixel_format','rgb24','-video_size',f'{W}x{H}','-framerate',str(FPS),'-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-movflags','+faststart',a.output]
+           with subprocess.Popen(cmd,stdin=subprocess.PIPE) as proc:
+            for k in range(round(D*FPS)):
+             proc.stdin.write(frame(k/FPS).tobytes())
+             if k%(5*FPS)==0:print(f'{k/FPS:.0f}s / {D:g}s',flush=True)
+            proc.stdin.close()
+            if proc.wait()!=0:raise RuntimeError('FFmpeg failed')
+          MM_RENDERER
+          python -c 'import os; d=float(os.environ["DURATION"]); assert 20 <= d <= 60, "Duration must be 20–60 seconds"'
+          if [ "$QUALITY" = preview ]; then WIDTH=432; else WIDTH=1080; fi
+          python render.py --width "$WIDTH" --fps 30 --duration "$DURATION" --output MeanwhileMash_GTA_Hype.mp4
+      - name: Upload video
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanwhilemash-gta6-hype
+          path: MeanwhileMash_GTA_Hype.mp4
+          retention-days: 7

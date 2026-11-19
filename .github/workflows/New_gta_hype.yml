@@ -120,7 +120,7 @@ jobs:
             tx(d,360,393,'VIEWS IN 24 HOURS',32,WHITE)
             # Expanding broadcast rings and an original three-dimensional video tile.
             for j in range(5):
-             rr=90+j*32+18*q;ellipse(d,360,680,rr,rr*.66,None,blend('#263B38','#759A22',.25+.40*(1-j/5)),1)
+             rr=90+j*32+18*q; pulse=math.exp(-((t-(.15+j*.23))/.16)**2);ellipse(d,360,680,rr,rr*.66,None,blend('#263B38','#B5EF32',.22+.65*pulse),1+round(2*pulse))
             floor(d,360,927);shadow(d,360,875,245)
             for j in range(5):
              a0=j*math.tau/5+q*.35;xx=360+223*math.cos(a0);yy=678+154*math.sin(a0)
@@ -155,7 +155,8 @@ jobs:
              number(d,'$1 BILLION','RETAIL SALES MILESTONE');floor(d,360,881)
              for row in range(3):
               for k in range(5):
-               j=row*5+k;h=(45+(j*31%115))*ease((q-.49)*4);cash(d,93+k*100+row*7,851-row*47,78,max(4,h),j%3!=0)
+               j=row*5+k;progress=ease((q-.49-j*.009)*5);h=(45+(j*31%115))*progress
+               if progress>0:cash(d,93+k*100+row*7,851-row*47,78,max(4,h),j%3!=0)
              tx(d,360,930,'RECORD-SETTING SPEED AT LAUNCH',20,WHITE)
            elif i==3:
             number(d,'13 YEARS','2013 TO 2026');grid(d);x0,x1=92,628;y0=668
@@ -195,10 +196,119 @@ jobs:
           MM_RENDERER
           python -c 'import os; d=float(os.environ["DURATION"]); assert 20 <= d <= 60, "Duration must be 20–60 seconds"'
           if [ "$QUALITY" = preview ]; then WIDTH=432; else WIDTH=1080; fi
-          python render.py --width "$WIDTH" --fps 30 --duration "$DURATION" --output MeanwhileMash_GTA_Hype.mp4
+          python render.py --width "$WIDTH" --fps 30 --duration "$DURATION" --output visual_only.mp4
+      - name: Generate and synchronize original sound effects
+        env:
+          DURATION: ${{ inputs.duration }}
+        run: |
+          cat > sfx.py <<'MM_SFX'
+          import argparse, math, wave, random
+          import numpy as np
+          p=argparse.ArgumentParser();p.add_argument('--duration',type=float,required=True);p.add_argument('--output',default='MeanwhileMash_GTA_Hype_SFX.wav');a=p.parse_args()
+          D=a.duration; SR=48000; scale=D/40; rng=np.random.default_rng(621)
+          mix=np.zeros((round(D*SR),2),dtype=np.float32)
+          def times(d):return np.arange(max(1,round(d*SR)),dtype=np.float64)/SR
+          def noise(t,lo,hi):
+           x=rng.normal(0,1,len(t));f=np.fft.rfftfreq(len(t),1/SR); b=np.fft.rfft(x);b*=np.minimum(1,(f/max(lo,1))**2)*np.minimum(1,(hi/np.maximum(f,1))**3);z=np.fft.irfft(b,n=len(t));return z/(np.max(np.abs(z))+1e-9)
+          def add(at,x,amp=.2,pan=0):
+           j=round(at*scale*SR); start=max(0,j); off=start-j;n=min(len(x)-off,len(mix)-start)
+           if n<=0:return
+           # Short fades keep each individual cue click-free.
+           x=np.array(x,dtype=np.float32);fade=min(96,len(x)//2)
+           if fade:x[:fade]*=np.linspace(0,1,fade);x[-fade:]*=np.linspace(1,0,fade)
+           mix[start:start+n,0]+=amp*x[off:off+n]*math.sqrt(1-pan);mix[start:start+n,1]+=amp*x[off:off+n]*math.sqrt(1+pan)
+          def impact(at,amp=.23):
+           t=times(.57);f=48*t+45*.095*(1-np.exp(-t/.095));x=.75*np.sin(2*np.pi*f)*np.exp(-t*8)+.25*noise(t,500,3600)*np.exp(-t*22);add(at,x,amp)
+          def whoosh(at,d=.34,amp=.12,pan=0):
+           t=times(d);env=np.sin(np.pi*t/d)**1.5; x=noise(t,300,3900)*env;add(at,x,amp,pan)
+          def pop(at,f=750,amp=.095,pan=0):
+           t=times(.105);x=(.8*np.sin(2*np.pi*(f*t+1400*t*t))+.2*noise(t,1200,6500))*np.exp(-t*36);add(at,x,amp,pan)
+          def tick(at,amp=.05,pan=0):
+           t=times(.038);x=(.6*noise(t,1700,7000)+.4*np.sin(2*np.pi*1500*t))*np.exp(-t*100);add(at,x,amp,pan)
+          def flutter(at,pan=0):
+           t=times(.14);x=noise(t,380,4200)*np.sin(np.pi*t/.14)**2*(.45+.55*np.sin(2*np.pi*27*t)**2);add(at,x,.105,pan)
+          def sweep(at,d=.5):
+           t=times(d);x=(.35*np.sin(2*np.pi*(200*t+1800*t*t))+.65*noise(t,500,4800))*np.sin(np.pi*t/d)**2;add(at,x,.11)
+          def ease(x):
+           x=max(0.,min(1.,x));return x*x*(3-2*x)
+          def inv(x):
+           lo,hi=0.,1.
+           for _ in range(30):
+            m=(lo+hi)/2
+            if ease(m)<x:lo=m
+            else:hi=m
+           return (lo+hi)/2
+          def frame_at(t):return math.ceil(t*scale*30-1e-8)/(30*scale)
+          def ring(at,f=460,amp=.15,pan=0):
+           t=times(.32);ph=f*t+130*(1-np.exp(-t*12))/12;x=(.65*np.sin(2*np.pi*ph)+.25*np.sin(2*np.pi*ph*1.51)+.1*noise(t,400,2800))*np.exp(-t*11);add(at,x,amp,pan)
+          def digit(at,f=1100,amp=.12,pan=0):
+           t=times(.043);ph=f*t+700*t*t;x=(.42*np.sin(2*np.pi*ph)+.36*np.sin(4*np.pi*ph)+.22*noise(t,1600,6800))*np.exp(-t*60);add(at,x,amp,pan)
+          def clock(at,alt=False):
+           t=times(.082);f=760 if alt else 510;x=(.48*np.sin(2*np.pi*f*t)+.52*noise(t,900,4800))*np.exp(-t*54);add(at,x,.15,.15 if alt else -.15)
+          def thud(at,amp=.12,pan=0):
+           t=times(.11);x=.65*np.sin(2*np.pi*(100*t-160*t*t))*np.exp(-t*32)+.35*noise(t,200,1800)*np.exp(-t*36);add(at,x,amp,pan)
+          def servo(at,length,amp=.075):
+           d=length*scale;t=times(d);u=t/d;ph=140*t+330*d*u*u/2;env=np.minimum(1,u*12)*np.minimum(1,(1-u)*12)
+           x=(.62*np.sin(2*np.pi*ph)+.18*np.sin(4*np.pi*ph)+.20*noise(t,300,2000))*env*(.7+.3*np.sin(2*np.pi*23*t)**2);add(at,x,amp)
+          def counter(start,span,goal,rate):
+           # Same smoothstep and rounding as video. Group very rapid digit changes to avoid harsh buzz.
+           finish=start+span/rate; last=None;lastcue=-99
+           for k in range(math.ceil(start*scale*30-1e-8),math.ceil(finish*scale*30)+1):
+            t=k/(30*scale);v=round(goal*ease((t-start)/span*rate))
+            if v!=last and v>0 and t*scale-lastcue>=.045:
+             digit(t,850+700*v/goal,.16,(-1)**k*.17);lastcue=t*scale
+            last=v
+           servo(start,span/rate,.065);pop(frame_at(finish),1050,.19)
+          def mark(at,f=660,amp=.12):pop(frame_at(at),f,amp)
+          # Hook: each visible ring pulse, number impact, and progress motion.
+          impact(0,.27);digit(0,1300,.14)
+          for j in range(5):ring(.15+j*.23,400+j*82,.17,(-1)**j*.28)
+          servo(0,4/1.8,.075);mark(4/1.8,1080);whoosh(.04,.3,.1)
+          for j in range(3):digit(.26+j*.19,1450,.075,(-1)**j*.28)
+          servo(0,4,.035);whoosh(3.74,.25,.13)
+          # Globe: sounds for each emerging dot using the same visual seed and threshold.
+          impact(4,.18);counter(4,6,475,2.2);ring(4,470,.13)
+          for j in range(55):
+           z=random.Random(j+40);x=z.uniform(-1,1);y=z.uniform(-1,1)
+           if x*x+y*y>.88:continue
+           at=4+6*inv(j/55)/1.7;mark(at,870+(j%7)*83,.085)
+          mark(4+6/1.7,1240);whoosh(9.74,.25)
+          # GTA V: sales counter and each cash bundle arrival and settling.
+          impact(10,.18);counter(10,8,230,5);thud(10,.15)
+          whoosh(13.62,.29,.13);impact(13.92,.26);ring(13.92,620,.12)
+          for j in range(15):
+           at=10+8*(.49+j*.009);flutter(frame_at(at),(j%5-2)*.20);thud(frame_at(at+1.6),.12,(j%5-2)*.20)
+          servo(13.92,2.6,.055);mark(16.53,1120);whoosh(17.72,.26)
+          # Years and timeline dots trigger separate clock ticks and electronic clicks.
+          impact(18,.18);servo(18,7/1.6,.065)
+          for j in range(1,14):
+           at=18+7*inv(j/13)/1.7;clock(frame_at(at),bool(j%2))
+           at2=18+7*inv(j/13)/1.6;digit(frame_at(at2),1380,.09)
+          mark(18+7/1.6,970,.15);whoosh(24.72,.26)
+          # Trailer counters, play symbols and chart bars each get their own cue.
+          for start,span,goal in [(25,6,93),(31,5,475)]:
+           impact(start,.20 if goal==93 else .27);ring(start,560,.15);digit(start,1650,.15)
+           counter(start,span,goal,2.1);servo(start,span/2.1,.085)
+           for frac in [.25,.5,.75,1]:mark(start+span*inv(frac)/2.1,560+frac*550,.10)
+           whoosh(start+span-.27,.25,.13)
+          # Individual conclusion cards slide into position.
+          for j in range(3):
+           at=36+4*j*.12;whoosh(at,.34,.15,(j-1)*.18);thud(frame_at(at+.38),.15);mark(at+.38,590+j*170,.15)
+          mark(38.65,660,.15);mark(38.86,990,.15)
+          # Gentle peak ceiling for adding voiceover later. No music or narration.
+          peak=float(np.max(np.abs(mix)));limit=10**(-8/20)
+          if peak>limit:mix*=limit/peak
+          with wave.open(a.output,'wb') as w:
+           w.setnchannels(2);w.setsampwidth(2);w.setframerate(SR);w.writeframes(np.int16(np.clip(mix,-1,1)*32767).tobytes())
+          print(f'Synced stereo SFX: {D:g}s; peak {20*math.log10(max(float(np.max(np.abs(mix))),1e-9)):.1f} dBFS')
+          MM_SFX
+          python sfx.py --duration "$DURATION" --output MeanwhileMash_GTA_Hype_SFX.wav
+          ffmpeg -hide_banner -loglevel warning -y -i visual_only.mp4 -i MeanwhileMash_GTA_Hype_SFX.wav -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -ar 48000 -shortest -movflags +faststart MeanwhileMash_GTA_Hype.mp4
       - name: Upload video
         uses: actions/upload-artifact@v4
         with:
           name: meanwhilemash-gta6-hype
-          path: MeanwhileMash_GTA_Hype.mp4
+          path: |
+            MeanwhileMash_GTA_Hype.mp4
+            MeanwhileMash_GTA_Hype_SFX.wav
           retention-days: 7

@@ -100,22 +100,39 @@ jobs:
           # Reference timeline for the previously supplied narration, based on an estimated read.
           # All timings are scaled by --duration, so users can match an overall voiceover length.
           B=[0,4,10,18,25,31,36,40]
-          HEAD=['THE GTA 6 HYPE','A GLOBAL FRANCHISE','THE GTA V LEGACY','THE 13-YEAR WAIT','TRAILER 01','TRAILER 02','WHY THE HYPE?']
-          FOOT=['A phenomenon built over years.','Worldwide franchise units sold-in.','A historic entertainment launch.','Between the two mainline releases.','YouTube views in the first 24 hours.','Across platforms in the first 24 hours.','Legacy. Anticipation. Global attention.']
+          HEAD=['GTA 6: THE HYPE','A GLOBAL FRANCHISE','THE GTA V LEGACY','THE 13-YEAR WAIT','TRAILER 01','TRAILER 02','WHY THE HYPE?']
+          FOOT=['Trailer 2 views across platforms in 24 hours.','Worldwide franchise units sold-in.','A historic entertainment launch.','Between the two mainline releases.','YouTube views in the first 24 hours.','Across platforms in the first 24 hours.','Legacy. Anticipation. Global attention.']
           def frame(time):
            t=time*40/D;i=next((j for j in range(7) if t<B[j+1]),6);q=clamp((t-B[i])/(B[i+1]-B[i])); e=ease(q); im=back.copy();d=ImageDraw.Draw(im)
            # editorial frame; preserve platform safe area
            tx(d,42,53,'meanwhile',24,WHITE,'lm'); tx(d,42+font(24).getlength('meanwhile')/S,53,'mash',24,L,'lm');tx(d,678,53,'GAMING / 03',14,DIM,'rm');line(d,[(42,83),(678,83)],BORDER)
            pill(d,42,108,f'0{i+1} / 07',True);tx(d,678,125,'THE NUMBERS BEHIND IT',13,DIM,'rm');tx(d,360,177,HEAD[i],36,WHITE,maxw=650)
            if i==0:
-            tx(d,360,250,'GTA 6',102,L);tx(d,360,332,'WHY THE WORLD COULDN’T WAIT',23,WHITE)
-            floor(d,360,878);shadow(d,360,874,218)
-            for j in range(8):
-             xx=70+j*72;hh=88+(j*37%140);cuboid(d,xx,824,54,hh,16,False)
-            for k in range(5):
-             r=118+k*33+12*math.sin(q*math.tau);ellipse(d,360,620,r,r*.62,None,'#3E5542',1)
-            sc=1+.045*math.sin(q*math.pi);ww=154*sc;hh=228*sc;gamecase(d,360-ww/2,650-hh/2,ww,hh,True,'VI')
-            for j in range(14): person(d,91+j*41,911,0.73,j in (3,7,10))
+            # Cold open: the payoff is visible on the very first frame.
+            # A quarter-second punch, expanding signal rings and layered screens.
+            box(d,42,104,636,101,'#162129',14,BORDER)
+            tx(d,360,132,'GTA 6',22,WHITE);tx(d,360,175,'ONE TRAILER. ONE DAY.',36,WHITE)
+            # A fast accent streak makes the first frame feel active without flashing.
+            for j in range(3):
+             xx=60+((q*340+j*205)%610);line(d,[(xx,211),(min(674,xx+55),211)],L,2)
+            bump=1+.055*math.exp(-((q-.10)/.065)**2)
+            tx(d,360,306,'475M+',round(134*bump),L,maxw=640)
+            tx(d,360,393,'VIEWS IN 24 HOURS',32,WHITE)
+            # Expanding broadcast rings and an original three-dimensional video tile.
+            for j in range(5):
+             rr=90+j*32+18*q;ellipse(d,360,680,rr,rr*.66,None,blend('#263B38','#759A22',.25+.40*(1-j/5)),1)
+            floor(d,360,927);shadow(d,360,875,245)
+            for j in range(5):
+             a0=j*math.tau/5+q*.35;xx=360+223*math.cos(a0);yy=678+154*math.sin(a0)
+             ww=62;hh=40;box(d,xx-ww/2,yy-hh/2,ww,hh,'#28383D',6,'#465B5C');play(d,xx,yy,12,True)
+            lift=9*math.sin(q*math.pi);xx=156;yy=540-lift;ww=400;hh=246
+            poly(d,[(xx,yy),(xx+20,yy-13),(xx+ww+20,yy-13),(xx+ww,yy)],'#50636A')
+            poly(d,[(xx+ww,yy),(xx+ww+20,yy-13),(xx+ww+20,yy+hh-13),(xx+ww,yy+hh)],'#34464B')
+            box(d,xx,yy,ww,hh,'#0A1116',18,'#87969C',2);box(d,xx+12,yy+12,ww-24,hh-24,'#203135',12)
+            play(d,xx+ww/2,yy+hh/2-9,68)
+            box(d,xx+26,yy+hh-35,ww-52,5,'#405158',2);box(d,xx+26,yy+hh-35,(ww-52)*(.18+.82*ease(q*1.8)),5,L,2)
+            # Curiosity bridge into the unchanged story.
+            tx(d,360,965,'HOW DID IT GET THIS BIG?',30,WHITE,maxw=640)
            elif i==1:
             v=round(475*ease(q*2.2)); number(d,f'{v}M'+('+' if v==475 else ''),'FRANCHISE UNITS SOLD-IN')
             grid(d); cx,cy,r=360,648,228;ellipse(d,cx,cy,r,r,'#24343C','#566B72',2)

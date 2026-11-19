@@ -1,0 +1,178 @@
+name: MeanwhileMash - Render video
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install renderer dependencies
+        run: |
+          python -m pip install pillow numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Render episode
+        run: |
+          cat > render.py <<'PYTHON_RENDERER'
+          """MeanwhileMash: procedural low-poly pilot. Requires Pillow, NumPy, FFmpeg."""
+          import argparse, math, subprocess, os
+          from functools import lru_cache
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont
+
+          P=argparse.ArgumentParser(); P.add_argument('--output',default='episode01.mp4'); P.add_argument('--width',type=int,default=1080); P.add_argument('--fps',type=int,default=30); P.add_argument('--still',type=float); A=P.parse_args()
+          W=A.width; H=W*16//9; S=W/720; FPS=A.fps
+          LIME='#C6FF00'; WHITE='#F5F5F5'; SLATE='#64748B'; DARK='#101820'
+          FONT='/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+          REG='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+          @lru_cache(None)
+          def font(n,b=True): return ImageFont.truetype(FONT if b else REG,max(1,round(n*S)))
+          def xy(x,y):return (round(x*S),round(y*S))
+          def txt(d,x,y,t,size=36,fill=WHITE,anchor='mm',bold=True): d.text(xy(x,y),t,font=font(size,bold),fill=fill,anchor=anchor,stroke_width=0)
+          def line(d,pts,fill,width=1): d.line([xy(*p) for p in pts],fill=fill,width=max(1,round(width*S)))
+          def rect(d,x,y,w,h,fill,rad=0,outline=None): d.rounded_rectangle([xy(x,y),xy(x+w,y+h)],radius=round(rad*S),fill=fill,outline=outline,width=max(1,round(S)))
+          def smooth(x): x=max(0,min(1,x));return x*x*(3-2*x)
+          def rgb(h):return np.array(tuple(int(h[i:i+2],16) for i in (1,3,5)),float)
+          Y,X=np.mgrid[0:H,0:W]; rr=np.sqrt(((X-W*.48)/W)**2+((Y-H*.54)/H)**2); glow=np.maximum(0,1-rr*2.15)**1.6
+          BG=Image.fromarray(np.uint8(np.clip(np.array([12,18,25])+glow[:,:,None]*np.array([18,32,37]),0,255)),'RGB'); del X,Y,rr,glow
+          # Meshes are drawn with a perspective camera and face lighting (no external assets).
+          CUBE=np.array([[-.5,-.5,-.5],[.5,-.5,-.5],[.5,.5,-.5],[-.5,.5,-.5],[-.5,-.5,.5],[.5,-.5,.5],[.5,.5,.5],[-.5,.5,.5]])
+          FACES=[[0,3,2,1],[4,5,6,7],[0,4,7,3],[1,2,6,5],[3,7,6,2],[0,1,5,4]]
+          # ring mesh, faceted for the recognizable head
+          HEAD=np.array([[0,.56,0]]+[[.43*math.cos(j*math.pi/4),y,.39*math.sin(j*math.pi/4)] for y in [.27,-.21] for j in range(8)]+[[0,-.48,0]])
+          HF=[]
+          for j in range(8):
+           k=(j+1)%8; HF.extend([[0,1+k,1+j],[1+j,1+k,9+k],[1+j,9+k,9+j],[17,9+j,9+k]])
+          LIGHT=np.array([-.4,.85,.5]); LIGHT/=np.linalg.norm(LIGHT)
+          def mesh(out,verts,faces,color):
+           col=rgb(color)
+           for f in faces:
+            p=verts[f]; n=np.cross(p[1]-p[0],p[2]-p[0]); l=np.linalg.norm(n)
+            if l<1e-8: continue
+            n/=l; shade=.51+.49*max(0,float(n@LIGHT)); c=tuple(np.uint8(np.clip(col*shade,0,255))); out.append((p,c,n))
+          def box(out,pos,size,color,rz=0,ry=0):
+           v=CUBE*np.array(size); cz,sz=math.cos(rz),math.sin(rz); cy,sy=math.cos(ry),math.sin(ry)
+           v=v@np.array([[cz,sz,0],[-sz,cz,0],[0,0,1]])@np.array([[cy,0,-sy],[0,1,0],[sy,0,cy]])+pos
+           mesh(out,v,FACES,color)
+          def limb(out,a,b,w,color):
+           a,b=np.array(a),np.array(b); u=b-a; length=np.linalg.norm(u); u/=length; x=np.cross(u,[0,0,1]); x/=max(np.linalg.norm(x),1e-8); z=np.cross(x,u); v=CUBE*np.array([w,length,w]); v=v@np.stack([x,u,z])+(a+b)/2; mesh(out,v,FACES,color)
+          def mash(out,x=0,z=0,t=0,seated=False):
+           y=.73 if seated else 1.14; phase=math.sin(t*2*math.pi)
+           box(out,[x,y+.45,z],[.61,.76,.36],LIME)
+           box(out,[x,y+.02,z],[.52,.22,.34],'#3D4C56')
+           mesh(out,HEAD*.84+[x,y+1.02,z],HF,WHITE)
+           for side in [-1,1]:
+            xx=x+side*.19
+            if seated:
+             limb(out,[xx,y,z],[xx,.73,z+.52],.19,'#465661'); limb(out,[xx,.73,z+.52],[xx,.16,z+.52],.17,'#465661'); footz=z+.64
+             shoulder=[x+side*.36,y+.69,z]; elbow=[x+side*.49,y+.25,z+.19]; hand=[x+side*.20,y+.34+(phase*.08 if side==1 else 0),z+.78]
+            else:
+             limb(out,[xx,y,z],[xx,.6,z],.21,'#465661'); limb(out,[xx,.6,z],[xx,.14,z],.19,'#465661'); footz=z+.1
+             shoulder=[x+side*.37,y+.69,z]; elbow=[x+side*.49,y+.29,z]; hand=[x+side*.55,y+.02,z+.05]
+            box(out,[xx,.10,footz],[.24,.20,.37],WHITE)
+            limb(out,shoulder,elbow,.19,LIME); limb(out,elbow,hand,.14,WHITE); box(out,hand,[.16,.15,.16],WHITE)
+          @lru_cache(maxsize=512)
+          def stack_mesh(x,z,h,w=.8,base=0):
+           out=[]
+           # stacked notes, drawn as layered bundles rather than a literal quantity
+           n=max(1,min(9,math.ceil(h/.14))); step=h/n
+           for j in range(n): box(out,[x,base+(j+.5)*step,z],[w,step*.87,w*.48],'#A8C5A1' if j%2 else '#789D78')
+           box(out,[x,base+h+.012,z],[w*.18,.023,w*.49],'#E8E3CA')
+           return out
+          def stack(out,x,z,h,w=.8,base=0):out.extend(stack_mesh(x,z,h,w,base))
+          def desk(out):
+           box(out,[0,.94,.92],[1.82,.12,.84],'#64748B')
+           for x in [-.77,.77]:
+            for z in [.63,1.21]: box(out,[x,.45,z],[.11,.87,.11],'#364754')
+           box(out,[0,.49,-.07],[.62,.15,.57],'#64748B')
+           for x in [-.23,.23]:box(out,[x,.23,-.07],[.08,.46,.08],'#364754')
+          def camera(az,dist,aimy=1.2):
+           target=np.array([0,aimy,0.4]); eye=target+np.array([math.sin(az)*dist,dist*.40,math.cos(az)*dist]); f=target-eye;f/=np.linalg.norm(f);r=np.cross(f,[0,1,0]);r/=np.linalg.norm(r);u=np.cross(r,f);return eye,r,u,f
+          def projector(cam):
+           eye,r,u,f=cam
+           def project(p):
+            q=p-eye; z=q@f; return np.stack([360+(q@r)*720/z,650-(q@u)*720/z],axis=-1),z
+           return project
+          def draw3d(d,out,cam):
+           eye,r,u,f=cam
+           visible=[]
+           for count in (3,4):
+            rows=[(p,c,n) for p,c,n in out if len(p)==count]
+            if not rows:continue
+            ps=np.array([row[0] for row in rows]); normals=np.array([row[2] for row in rows]); q=ps-eye; z=q@f
+            valid=(np.einsum('ij,ij->i',eye-ps.mean(1),normals)>0)&(z.min(1)>.12)
+            ids=np.flatnonzero(valid); q=q[ids]; z=z[ids]
+            coords=np.stack([360+(q@r)*720/z,650-(q@u)*720/z],axis=-1)*S
+            coords=np.rint(coords).astype(int)
+            visible.extend((depth,coord.tolist(),rows[j][1]) for j,depth,coord in zip(ids,z.mean(1),coords))
+           for _,a,c in sorted(visible,key=lambda v:-v[0]):d.polygon([tuple(q) for q in a],fill=c)
+          def floor(d,cam):
+           project=projector(cam)
+           for i in range(-12,13):
+            for p in [np.array([[i,0,-10],[i,0,8]]),np.array([[-12,0,i],[12,0,i]])]:
+             a,z=project(p)
+             if min(z)>.3:line(d,a,'#263941')
+          # Voiceover timing is a draft; align the real ElevenLabs recording in CapCut.
+          SCENES=[(0,4,'A BILLION DOLLARS','ONE CONDITION'),(4,8,'COUNT EVERY BILL','ONE BY ONE'),(8,13,'$86,400','IN 24 HOURS'),(13,17,'ONE BILLION','THAT IS A LOT OF CASH'),(17,23,'31.7 YEARS','WITHOUT A SINGLE BREAK'),(23,26,'8 HOURS','EVERY SINGLE DAY'),(26,30,'95 YEARS','TO FINISH COUNTING')]
+          def frame(t):
+           i=next((j for j,s in enumerate(SCENES) if t<s[1]),6); a,b,title,sub=SCENES[i]; p=(t-a)/(b-a); im=BG.copy();d=ImageDraw.Draw(im);out=[]
+           # Dynamic camera and distinct staging per beat
+           az=[.35,.20,.27,-.25,.20,-.20,.28][i]+.20*math.sin(p*math.pi)
+           dist=[5+3*smooth(p),5.2,5.2,8+7*smooth(p),5.8,5.5,13-3*smooth(p)][i]
+           cam=camera(az,dist,1.2 if i not in [3,6] else 2.1);floor(d,cam)
+           if i in [0,3,6]:
+            mash(out,t=t)
+            count=12 if i==0 else 29
+            for k in range(count):
+             col=k%7-3; row=k//7; x=col*1.13; z=-1.15-row*.74
+             if i==0 and k>1+count*smooth(p):continue
+             h=(.45+(k*13%9)*.22)*(1 if i==0 else 1.6)
+             stack(out,x,z,h,.94)
+           else:
+            mash(out,z=0,t=t,seated=True);desk(out)
+            stack(out,-.53,1.0,.12,.35,1.0);stack(out,.52,.99,.06+.22*p,.35,1.0)
+            box(out,[.15,1.12+math.sin(t*math.pi*2)*.035,.88],[.37,.025,.18],'#D8E6B8',ry=.15)
+           draw3d(d,out,cam)
+           # branding and restrained information hierarchy
+           txt(d,36,49,'meanwhile',23,WHITE,'lm'); offset=font(23).getlength('meanwhile')/S;txt(d,36+offset,49,'mash',23,LIME,'lm')
+           txt(d,682,49,'01 / CURIOSITY',14,'#9EACB4','rm');line(d,[(36,78),(684,78)],'#35464E')
+           rect(d,36,103,116,29,'#25363C',14);txt(d,94,117,f'0{i+1} / 07',14,LIME)
+           # fixed high-contrast headline area above the geometry
+           size=64 if len(title)<14 else 48;txt(d,360,213,title,size,LIME);txt(d,360,269,sub,22,WHITE)
+           if i==0:txt(d,360,329,'$1,000,000,000',39,WHITE)
+           if i==1 or i==2:
+            val=int((t-4)*1) if i==1 else int(86400*smooth(p)); rect(d,198,347,324,75,'#15252C',13,'#48605E');txt(d,360,385,f'${val:,.0f}',42,LIME)
+           if i==4:
+            year=min(31.7,31.7*smooth(p));txt(d,360,340,f'{year:04.1f} / 31.7',32,WHITE)
+            for j in range(32):rect(d,58+j*19,372,14,13,LIME if j<year else '#34464D',3)
+           if i==5:
+            for j in range(24):
+             th=(j/24)*math.tau-math.pi/2; col=LIME if j<8 else '#64748B';line(d,[(360+54*math.cos(th),380+54*math.sin(th)),(360+68*math.cos(th),380+68*math.sin(th))],col,4)
+            txt(d,360,380,'8/24',24,WHITE)
+           # bottom fact card / progress indicator
+           labels=['Imagine the challenge.','Speed: one $1 bill per second.','That is 86,400 single bills.','The stacks are illustrative.','Counting 24 hours a day.','No days off. No holidays.','A lifetime spent counting.']
+           rect(d,40,1010,640,113,'#19282F',18);rect(d,56,1027,5,77,LIME,2);txt(d,77,1049,labels[i],23,WHITE,'lm');txt(d,77,1089,'C U R I O S I T Y   W I T H O U T   L I M I T S',12,'#A2B2BC','lm')
+           line(d,[(40,1150),(680,1150)],'#34464D',3);line(d,[(40,1150),(40+640*min(1,t/30),1150)],LIME,3)
+           return im
+          if A.still is not None:frame(A.still).save(A.output)
+          else:
+           cmd=['ffmpeg','-hide_banner','-loglevel','warning','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-movflags','+faststart',A.output]
+           proc=subprocess.Popen(cmd,stdin=subprocess.PIPE)
+           for k in range(30*FPS):
+            proc.stdin.write(frame(k/FPS).tobytes())
+            if k%(5*FPS)==0: print(f'{k/FPS:.0f}s / 30s',flush=True)
+           proc.stdin.close(); assert proc.wait()==0
+          PYTHON_RENDERER
+          python render.py --width 1080 --fps 30 --output meanwhilemash-episode01.mp4
+      - name: Upload MP4
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanwhilemash-episode01
+          path: meanwhilemash-episode01.mp4
+          retention-days: 7

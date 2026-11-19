@@ -37,7 +37,9 @@ jobs:
           bpy.ops.wm.read_factory_settings(use_empty=True)
           s=bpy.context.scene
           s.render.engine='CYCLES'; s.cycles.device='CPU'; s.cycles.samples=12 if mode=='preview' else 32
-          s.cycles.use_denoising=True
+          s.cycles.use_denoising=False
+          for layer in s.view_layers:
+              if hasattr(layer.cycles, "use_denoising"): layer.cycles.use_denoising=False
           s.cycles.max_bounces=5; s.cycles.diffuse_bounces=2; s.cycles.glossy_bounces=3
           s.render.resolution_x=1080 if mode in ('full','still') else 450
           s.render.resolution_y=1920 if mode in ('full','still') else 800

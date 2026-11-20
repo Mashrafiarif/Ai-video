@@ -1,0 +1,563 @@
+name: Bengali Reel Animation Pack V5
+
+on:
+  workflow_dispatch:
+    inputs:
+      width:
+        description: Animation resolution
+        type: choice
+        options:
+          - '720'
+          - '1080'
+        default: '1080'
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install pillow==11.3.0 imageio-ffmpeg==0.6.0
+          python -m pip check
+          python -c "import PIL, imageio_ffmpeg; print('Dependencies ready')"
+
+      - name: Generate premium animation library
+        env:
+          WIDTH: ${{ inputs.width }}
+        shell: bash
+        run: |
+          mkdir -p output
+
+          cat > render.py <<'PY'
+          import os, math, json, wave, subprocess
+          from array import array
+          from pathlib import Path
+          from PIL import Image, ImageDraw, ImageFont
+          import imageio_ffmpeg
+
+          OUT = Path("output")
+          OUT.mkdir(exist_ok=True)
+
+          FF = imageio_ffmpeg.get_ffmpeg_exe()
+          W = int(os.environ.get("WIDTH", "1080"))
+          H = W * 16 // 9
+          FPS = 30
+          SCENE_DUR = 5
+          S = W / 720
+
+          BG = (9, 16, 30)
+          PANEL = (22, 34, 52)
+          PANEL2 = (31, 50, 72)
+          WHITE = (241, 247, 250)
+          TEAL = (63, 227, 193)
+          BLUE = (112, 169, 255)
+          GOLD = (255, 198, 96)
+          RED = (248, 108, 120)
+          GREEN = (82, 215, 108)
+          YELLOW = (255, 219, 88)
+          MUTE = (92, 114, 139)
+          BLACK = (6, 10, 16)
+
+          SCENES = [
+              ("scroll_skip", "বিজ্ঞাপন স্কিপ", "Facebook ad skip / scroll stop"),
+              ("wasted_budget", "টাকা নষ্ট", "Budget burning because people skip"),
+              ("toy_product", "সাধারণ বিজ্ঞাপন", "Toy product-first ad"),
+              ("mobile_problem", "কার্যকর বিজ্ঞাপন", "Child watching mobile / problem-first"),
+              ("comparison", "পার্থক্য", "Product-first vs problem-first"),
+              ("three_jobs", "ভালো হুক", "A good hook has three jobs"),
+              ("attention", "আকর্ষণ", "Attention grabbing"),
+              ("relevance", "সম্পর্ক", "Make it personally relevant"),
+              ("curiosity", "কৌতূহল", "Create curiosity"),
+              ("hook_3sec", "৩ সেকেন্ড", "First three seconds matter"),
+              ("testing", "টেস্টিং", "Creative testing"),
+              ("results", "ফলাফল", "Views, clicks, sales growth")
+          ]
+
+          def try_font(size, bold=False):
+              candidates = [
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                  "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+              ]
+              for p in candidates:
+                  if Path(p).exists():
+                      try:
+                          return ImageFont.truetype(p, size=size)
+                      except:
+                          pass
+              return ImageFont.load_default()
+
+          title_font = try_font(round(26*S), True)
+          label_font = try_font(round(18*S), True)
+          small_font = try_font(round(14*S), False)
+          big_font = try_font(round(42*S), True)
+
+          def xy(x, y):
+              return round(x*S), round(y*S)
+
+          def rect(x, y, w, h):
+              return (*xy(x, y), *xy(x+w, y+h))
+
+          def rr(d, x, y, w, h, c, r=18, outline=None, width=2):
+              if w <= 0 or h <= 0:
+                  return
+              d.rounded_rectangle(
+                  rect(x, y, w, h),
+                  radius=max(1, round(r*S)),
+                  fill=c,
+                  outline=outline,
+                  width=max(1, round(width*S))
+              )
+
+          def circle(d, x, y, r, c, outline=None, width=2):
+              d.ellipse(
+                  rect(x-r, y-r, 2*r, 2*r),
+                  fill=c,
+                  outline=outline,
+                  width=max(1, round(width*S))
+              )
+
+          def line(d, pts, c, w=4):
+              d.line(
+                  [xy(*p) for p in pts],
+                  fill=c,
+                  width=max(1, round(w*S)),
+                  joint="curve"
+              )
+
+          def txt(d, x, y, s, font, fill=WHITE, anchor="la"):
+              d.text(xy(x, y), s, font=font, fill=fill, anchor=anchor)
+
+          def ease(t):
+              t = max(0, min(1, t))
+              return 1 - (1-t)**3
+
+          def pulse(t, speed=3):
+              return (math.sin(t*speed)+1)/2
+
+          def card(d, x, y, w, h, fill=PANEL):
+              rr(d, x+8, y+10, w, h, (3, 8, 18), 24)
+              rr(d, x, y, w, h, fill, 24, outline=(48,70,96), width=2)
+
+          def draw_header(d, title):
+              rr(d, 38, 36, 220, 44, (17, 28, 44), 14, outline=(60, 92, 120))
+              rr(d, 52, 54, 58, 5, TEAL, 3)
+              txt(d, 56, 68, title, title_font, WHITE)
+
+          def draw_phone(d, x, y, w=230, h=420):
+              rr(d, x, y, w, h, (18, 25, 37), 28, outline=(86, 100, 125), width=3)
+              rr(d, x+16, y+22, w-32, h-44, (34, 64, 110), 18)
+              rr(d, x+86, y+7, 58, 7, (60, 70, 80), 4)
+
+          def draw_fb_feed(d, x, y, t):
+              draw_phone(d, x, y)
+              sy = ((t*85) % 120)
+              for i in range(4):
+                  yy = y + 50 + i*105 - sy
+                  rr(d, x+28, yy, 174, 85, WHITE, 12)
+                  rr(d, x+38, yy+12, 46, 46, BLUE if i != 1 else TEAL, 10)
+                  rr(d, x+94, yy+18, 76, 8, PANEL2, 4)
+                  rr(d, x+94, yy+38, 56, 6, MUTE, 4)
+              txt(d, x+40, y+36, "facebook", label_font, WHITE)
+
+          def draw_arrow(d, x1, y1, x2, y2, c):
+              line(d, [(x1,y1),(x2,y2)], c, 5)
+              ang = math.atan2(y2-y1, x2-x1)
+              for k in (-0.55, 0.55):
+                  line(d, [(x2,y2),
+                           (x2-16*math.cos(ang+k), y2-16*math.sin(ang+k))], c, 5)
+
+          def draw_toy(d, cx, cy, scale=1.0, bob=0):
+              s = scale
+              circle(d, cx, cy-74*s+bob, 34*s, GOLD)
+              circle(d, cx-23*s, cy-97*s+bob, 14*s, GOLD)
+              circle(d, cx+23*s, cy-97*s+bob, 14*s, GOLD)
+              circle(d, cx-11*s, cy-79*s+bob, 3.5*s, BLACK)
+              circle(d, cx+11*s, cy-79*s+bob, 3.5*s, BLACK)
+              rr(d, cx-7*s, cy-67*s+bob, 14*s, 9*s, (193,134,83), 5)
+              rr(d, cx-42*s, cy-45*s+bob, 84*s, 95*s, GOLD, 24)
+              circle(d, cx-48*s, cy-20*s+bob, 14*s, GOLD)
+              circle(d, cx+48*s, cy-20*s+bob, 14*s, GOLD)
+              circle(d, cx-22*s, cy+58*s+bob, 15*s, GOLD)
+              circle(d, cx+22*s, cy+58*s+bob, 15*s, GOLD)
+              rr(d, cx-18*s, cy-38*s+bob, 36*s, 12*s, RED, 6)
+
+          def draw_check_row(d, x, y, text, ok=True, width_box=200):
+              circle(d, x+12, y+11, 10, GREEN if ok else RED)
+              if ok:
+                  line(d, [(x+6,y+11),(x+11,y+17),(x+19,y+6)], WHITE, 3)
+              else:
+                  line(d, [(x+6,y+6),(x+18,y+18)], WHITE, 3)
+                  line(d, [(x+6,y+18),(x+18,y+6)], WHITE, 3)
+              rr(d, x+30, y+3, width_box, 16, (255,255,255,0), 4, outline=None, width=0)
+              txt(d, x+30, y+16, text, small_font, WHITE)
+
+          def draw_child_mobile(d, x, y, t):
+              # body
+              circle(d, x+85, y+70, 34, (233, 193, 160))
+              rr(d, x+45, y+110, 82, 80, (228, 205, 70), 24)
+              # hair
+              d.pieslice(rect(x+48, y+35, 74, 52), 180, 360, fill=(45,54,70))
+              # arms
+              line(d, [(x+52,y+128),(x+25,y+165)], (233,193,160), 10)
+              line(d, [(x+120,y+128),(x+143,y+164)], (233,193,160), 10)
+              # phone
+              px = x+88 + math.sin(t*4)*5
+              py = y+145 + math.cos(t*4)*3
+              rr(d, px, py, 42, 66, (18,24,32), 8)
+              rr(d, px+5, py+7, 32, 48, (90,150,255), 5)
+              # glow
+              circle(d, px+21, py+26, 58 + 8*pulse(t,4), None, outline=(80,190,255), width=3)
+              txt(d, x+18, y+232, "মোবাইল", small_font, WHITE)
+
+          def draw_money_burn(d, x, y, t):
+              for i in range(5):
+                  dy = (t*75 + i*35) % 170
+                  rr(d, x + (i%2)*55, y+150-dy, 46, 24, GREEN, 6)
+                  txt(d, x+16+(i%2)*55, y+166-dy, "$", label_font, BLACK)
+              rr(d, x+120, y+30, 170, 54, RED, 14)
+              txt(d, x+205, y+63, "স্কিপ", title_font, WHITE, anchor="ma")
+
+          def draw_people_icons(d, x, y, active=1):
+              for i in range(3):
+                  xx = x + i*60
+                  c = TEAL if i == active else MUTE
+                  circle(d, xx, y, 15, c)
+                  rr(d, xx-20, y+20, 40, 28, c, 10)
+
+          def draw_magnet(d, x, y, t):
+              rr(d, x, y, 36, 86, RED, 12)
+              rr(d, x+64, y, 36, 86, RED, 12)
+              rr(d, x, y, 100, 24, WHITE, 8)
+              rr(d, x, y+62, 100, 24, WHITE, 8)
+              line(d, [(x+18,y+88),(x+18,y+118)], RED, 10)
+              line(d, [(x+82,y+88),(x+82,y+118)], RED, 10)
+              for i in range(3):
+                  cx = x+50 + math.cos(t*2+i)*60
+                  cy = y+46 + math.sin(t*2+i)*35
+                  circle(d, cx, cy, 11, BLUE if i%2==0 else TEAL)
+
+          def draw_question_box(d, x, y, t):
+              rr(d, x, y, 170, 120, (111,63,210), 18)
+              rr(d, x+16, y+16, 138, 88, (152,83,255), 14)
+              txt(d, x+85, y+62, "?", big_font, YELLOW, anchor="ma")
+              circle(d, x+85, y+60, 56+8*pulse(t,4), None, outline=GOLD, width=3)
+
+          def draw_chart(d, x, y, t):
+              line(d, [(x,y+160),(x,y),(x+220,y+160)], MUTE, 3)
+              vals = [45, 70, 95, 125, 150]
+              for i, v in enumerate(vals):
+                  vv = v * ease(t*1.8 - i*0.15)
+                  rr(d, x+22+i*38, y+160-vv, 24, vv, TEAL if i<4 else GREEN, 6)
+              draw_arrow(d, x+20, y+145, x+210, y+26, GREEN)
+
+          base = Image.new("RGB", (W, H), BG)
+          bd = ImageDraw.Draw(base)
+
+          for y in range(0, H, max(1, round(4*S))):
+              p = max(0, 1 - abs(y - H*0.5)/(H*0.7))
+              c = (
+                  min(255, BG[0] + int(7*p)),
+                  min(255, BG[1] + int(14*p)),
+                  min(255, BG[2] + int(24*p))
+              )
+              bd.rectangle((0, y, W, y+max(1, round(4*S))), fill=c)
+
+          step = max(28, round(50*S))
+          for x in range(round(36*S), W, step):
+              for y in range(round(150*S), H-round(80*S), step):
+                  r = max(1, round(1.2*S))
+                  bd.ellipse((x-r, y-r, x+r, y+r), fill=(33, 52, 74))
+
+          def render_scene(mode, title, desc, t):
+              im = base.copy()
+              d = ImageDraw.Draw(im)
+
+              a = ease(t/0.55)
+              dy = 42*(1-a)
+              draw_header(d, title)
+
+              rr(d, 38, 100, 644, 1116, (14, 22, 35), 34, outline=(40, 64, 90), width=2)
+
+              # subtitle label
+              rr(d, 54, 1120, 220, 42, (16, 28, 43), 12)
+              txt(d, 70, 1148, desc, small_font, WHITE)
+
+              if mode == "scroll_skip":
+                  card(d, 115, 210+dy, 250, 560)
+                  draw_fb_feed(d, 125, 225+dy, t)
+                  circle(d, 530, 548, 44+7*pulse(t,5), TEAL)
+                  draw_arrow(d, 530, 573, 530, 520, BLACK)
+                  txt(d, 445, 675, "স্ক্রল", label_font, WHITE)
+
+              elif mode == "wasted_budget":
+                  card(d, 90, 220+dy, 260, 500)
+                  draw_fb_feed(d, 110, 244+dy, t)
+                  card(d, 390, 278+dy, 220, 300, fill=PANEL2)
+                  draw_money_burn(d, 420, 305+dy, t)
+                  rr(d, 398, 618+dy, 204, 76, RED, 18)
+                  txt(d, 500, 665+dy, "দর্শক স্কিপ করছে", small_font, WHITE, anchor="ma")
+
+              elif mode == "toy_product":
+                  card(d, 95, 178+dy, 530, 760, fill=PANEL2)
+                  rr(d, 118, 210+dy, 484, 86, RED, 16)
+                  txt(d, 360, 264+dy, "সাধারণ বিজ্ঞাপন", title_font, WHITE, anchor="ma")
+                  draw_toy(d, 360, 515+dy, 1.55, bob=math.sin(t*2)*6)
+                  draw_check_row(d, 160, 740+dy, "উন্নত মান", True, 180)
+                  draw_check_row(d, 160, 784+dy, "আকর্ষণীয় ডিজাইন", True, 220)
+                  draw_check_row(d, 160, 828+dy, "সাশ্রয়ী মূল্য", True, 190)
+                  rr(d, 232, 876+dy, 256, 72, RED, 18)
+                  txt(d, 360, 920+dy, "মাত্র ৮৯৯৳", title_font, WHITE, anchor="ma")
+
+              elif mode == "mobile_problem":
+                  card(d, 82, 165+dy, 556, 790)
+                  rr(d, 110, 192+dy, 500, 86, GREEN, 16)
+                  txt(d, 360, 246+dy, "কার্যকর বিজ্ঞাপন", title_font, WHITE, anchor="ma")
+                  draw_child_mobile(d, 160, 360+dy, t)
+                  rr(d, 88, 820+dy, 544, 110, GOLD, 18)
+                  txt(d, 360, 866+dy, "আপনার সন্তান কি", label_font, BLACK, anchor="ma")
+                  txt(d, 360, 898+dy, "মোবাইলের প্রতি একটু বেশি", label_font, BLACK, anchor="ma")
+                  txt(d, 360, 930+dy, "আসক্ত?", title_font, RED, anchor="ma")
+
+              elif mode == "comparison":
+                  card(d, 62, 235+dy, 260, 560)
+                  rr(d, 88, 254+dy, 208, 56, RED, 14)
+                  txt(d, 192, 290+dy, "প্রোডাক্ট-ফার্স্ট", small_font, WHITE, anchor="ma")
+                  draw_toy(d, 192, 465+dy, 1.0, bob=math.sin(t*2)*4)
+                  draw_check_row(d, 92, 638+dy, "ফিচার বলে", False, 145)
+                  draw_check_row(d, 92, 682+dy, "দাম বলে", False, 145)
+                  draw_check_row(d, 92, 726+dy, "সমস্যা ছোঁয় না", False, 170)
+
+                  circle(d, 360, 512+dy, 38, YELLOW)
+                  txt(d, 360, 526+dy, "VS", title_font, BLACK, anchor="ma")
+
+                  card(d, 398, 235+dy, 260, 560)
+                  rr(d, 424, 254+dy, 208, 56, GREEN, 14)
+                  txt(d, 528, 290+dy, "প্রবলেম-ফার্স্ট", small_font, WHITE, anchor="ma")
+                  draw_child_mobile(d, 422, 386+dy, t)
+                  draw_check_row(d, 428, 638+dy, "বাস্তব সমস্যা", True, 150)
+                  draw_check_row(d, 428, 682+dy, "আবেগিক সংযোগ", True, 160)
+                  draw_check_row(d, 428, 726+dy, "সমাধানের ইঙ্গিত", True, 170)
+
+              elif mode == "three_jobs":
+                  card(d, 110, 250+dy, 500, 600)
+                  txt(d, 360, 330+dy, "ভালো হুকের", big_font, WHITE, anchor="ma")
+                  txt(d, 360, 390+dy, "তিনটি কাজ আছে", big_font, RED, anchor="ma")
+                  for i, label in enumerate(["১", "২", "৩"]):
+                      circle(d, 216+i*144, 560+dy, 46+6*pulse(t+i), YELLOW)
+                      txt(d, 216+i*144, 577+dy, label, big_font, BLACK, anchor="ma")
+                  txt(d, 216, 650+dy, "আকর্ষণ", label_font, WHITE, anchor="ma")
+                  txt(d, 360, 650+dy, "সম্পর্ক", label_font, WHITE, anchor="ma")
+                  txt(d, 504, 650+dy, "কৌতূহল", label_font, WHITE, anchor="ma")
+
+              elif mode == "attention":
+                  card(d, 110, 250+dy, 500, 620)
+                  draw_magnet(d, 300, 430+dy, t)
+                  draw_people_icons(d, 240, 665+dy, active=1)
+                  txt(d, 360, 330+dy, "১) দৃষ্টি আকর্ষণ", big_font, WHITE, anchor="ma")
+                  txt(d, 360, 760+dy, "প্রথমেই চোখে পড়তে হবে", label_font, TEAL, anchor="ma")
+
+              elif mode == "relevance":
+                  card(d, 88, 190+dy, 544, 700)
+                  txt(d, 360, 270+dy, "২) নিজের সাথে সম্পর্ক", title_font, WHITE, anchor="ma")
+                  draw_child_mobile(d, 118, 410+dy, t)
+                  rr(d, 392, 408+dy, 170, 120, PANEL2, 18)
+                  txt(d, 478, 474+dy, "মা ভাববে:", label_font, WHITE, anchor="ma")
+                  rr(d, 386, 560+dy, 190, 98, GOLD, 16)
+                  txt(d, 481, 617+dy, "এটা তো", label_font, BLACK, anchor="ma")
+                  txt(d, 481, 648+dy, "আমার বাচ্চারই", small_font, BLACK, anchor="ma")
+                  txt(d, 481, 676+dy, "সমস্যা!", label_font, RED, anchor="ma")
+
+              elif mode == "curiosity":
+                  card(d, 112, 240+dy, 496, 650)
+                  txt(d, 360, 315+dy, "৩) কৌতূহল তৈরি", title_font, WHITE, anchor="ma")
+                  draw_question_box(d, 275, 440+dy, t)
+                  rr(d, 172, 678+dy, 376, 86, PANEL2, 16)
+                  txt(d, 360, 730+dy, "এর সমাধান কী?", title_font, WHITE, anchor="ma")
+
+              elif mode == "hook_3sec":
+                  card(d, 100, 220+dy, 520, 700)
+                  txt(d, 360, 305+dy, "প্রথম ৩ সেকেন্ড", big_font, WHITE, anchor="ma")
+                  rr(d, 260, 388+dy, 200, 200, (35, 48, 66), 100)
+                  sec = 3 - min(2, int(t))
+                  txt(d, 360, 510+dy, str(sec), big_font, YELLOW, anchor="ma")
+                  circle(d, 360, 488+dy, 130, None, outline=TEAL, width=6)
+                  txt(d, 360, 650+dy, "এখানেই মানুষ", label_font, WHITE, anchor="ma")
+                  txt(d, 360, 685+dy, "থামবে নাকি স্ক্রল করবে", label_font, WHITE, anchor="ma")
+                  txt(d, 360, 720+dy, "তা ঠিক হয়", label_font, WHITE, anchor="ma")
+
+              elif mode == "testing":
+                  card(d, 70, 230+dy, 580, 700)
+                  txt(d, 360, 310+dy, "Creative Testing", big_font, WHITE, anchor="ma")
+                  for i in range(3):
+                      xx = 108 + i*176
+                      yy = 430 + dy + math.sin(t*2+i)*8
+                      card(d, xx, yy, 140, 240, fill=PANEL2 if i==1 else PANEL)
+                      rr(d, xx+18, yy+20, 104, 74, BLUE if i!=1 else TEAL, 12)
+                      rr(d, xx+24, yy+110, 92, 10, WHITE, 4)
+                      rr(d, xx+24, yy+132, 60, 8, MUTE, 4)
+                      circle(d, xx+70, yy+190, 19, GREEN if i==1 else RED)
+                  txt(d, 360, 748+dy, "যেটা কাজ করে, সেটাকেই scale করতে হবে", label_font, TEAL, anchor="ma")
+
+              elif mode == "results":
+                  card(d, 86, 200+dy, 548, 760)
+                  txt(d, 360, 278+dy, "সঠিক হুকের ফলাফল", title_font, WHITE, anchor="ma")
+                  draw_chart(d, 170, 490+dy, t)
+                  draw_check_row(d, 414, 446+dy, "বেশি ভিউ", True, 120)
+                  draw_check_row(d, 414, 494+dy, "বেশি ক্লিক", True, 125)
+                  draw_check_row(d, 414, 542+dy, "বেশি সেল", True, 120)
+                  draw_check_row(d, 414, 590+dy, "কম স্কিপ", True, 120)
+                  rr(d, 170, 860+dy, 380, 72, GREEN, 16)
+                  txt(d, 360, 904+dy, "হুক বদলালেই ফল বদলায়", title_font, WHITE, anchor="ma")
+
+              return im
+
+          scene_map = []
+          for i, (mode, title, desc) in enumerate(SCENES):
+              scene_map.append({
+                  "scene": i+1,
+                  "start_seconds": i*SCENE_DUR,
+                  "end_seconds": (i+1)*SCENE_DUR,
+                  "animation": mode,
+                  "title_bn": title,
+                  "description_en": desc
+              })
+
+          (OUT / "scene_map.json").write_text(
+              json.dumps(scene_map, ensure_ascii=False, indent=2),
+              encoding="utf-8"
+          )
+
+          (OUT / "animation_index.txt").write_text(
+              "\n".join(
+                  f"{s['start_seconds']:03d}s - {s['end_seconds']:03d}s | {s['title_bn']} | {s['description_en']}"
+                  for s in scene_map
+              ),
+              encoding="utf-8"
+          )
+
+          video = subprocess.Popen([
+              FF,
+              "-hide_banner",
+              "-loglevel", "error",
+              "-y",
+              "-f", "rawvideo",
+              "-pix_fmt", "rgb24",
+              "-s", f"{W}x{H}",
+              "-r", str(FPS),
+              "-i", "-",
+              "-an",
+              "-c:v", "libx264",
+              "-preset", "veryfast",
+              "-crf", "19",
+              "-pix_fmt", "yuv420p",
+              "-threads", "4",
+              "silent.mp4"
+          ], stdin=subprocess.PIPE)
+
+          try:
+              for idx, (mode, title, desc) in enumerate(SCENES):
+                  print(f"Rendering {idx+1}/{len(SCENES)}: {mode}", flush=True)
+                  for f in range(SCENE_DUR * FPS):
+                      t = f / FPS
+                      frame = render_scene(mode, title, desc, t)
+                      video.stdin.write(frame.tobytes())
+          finally:
+              video.stdin.close()
+              status = video.wait()
+
+          if status != 0:
+              raise RuntimeError("Video render failed")
+
+          RATE = 44100
+          samples = array("h")
+
+          for i, (mode, _, _) in enumerate(SCENES):
+              freq = 380 + (i % 5) * 90
+              clip = [0.0] * (SCENE_DUR * RATE)
+
+              def add(start, length, fn):
+                  offset = round(start * RATE)
+                  total = min(round(length * RATE), len(clip) - offset)
+                  for j in range(max(0, total)):
+                      clip[offset + j] += fn(j / RATE)
+
+              add(0.00, 0.22, lambda t: 0.11 * math.sin(math.pi*t/0.22)**2 * math.sin(math.tau*(freq*t + 520*t*t)))
+              add(0.55, 0.10, lambda t: 0.05 * math.exp(-28*t) * math.sin(math.tau*(freq+120)*t))
+              add(1.10, 0.08, lambda t: 0.045 * math.exp(-24*t) * math.sin(math.tau*(freq+220)*t))
+              add(1.60, 0.10, lambda t: 0.05 * math.exp(-25*t) * math.sin(math.tau*(freq+70)*t))
+
+              if mode in ("attention", "curiosity", "results"):
+                  add(2.00, 0.35, lambda t: 0.07 * math.exp(-8*t) * (math.sin(math.tau*660*t) + math.sin(math.tau*880*t)))
+
+              samples.extend(int(max(-1, min(1, v)) * 32767) for v in clip)
+
+          with wave.open(str(OUT / "animation_sfx.wav"), "wb") as f:
+              f.setparams((1, 2, RATE, 0, "NONE", "not compressed"))
+              f.writeframes(samples.tobytes())
+
+          subprocess.run([
+              FF,
+              "-hide_banner",
+              "-loglevel", "error",
+              "-y",
+              "-i", "silent.mp4",
+              "-i", str(OUT / "animation_sfx.wav"),
+              "-c:v", "copy",
+              "-c:a", "aac",
+              "-b:a", "160k",
+              "-shortest",
+              "-movflags", "+faststart",
+              str(OUT / "animations.mp4")
+          ], check=True)
+
+          print(f"SUCCESS: {len(SCENES)*SCENE_DUR}s, {W}x{H}, {FPS}fps", flush=True)
+          PY
+
+          python -u render.py
+
+      - name: Verify final render
+        run: |
+          python - <<'PY'
+          import subprocess
+          import imageio_ffmpeg
+          from pathlib import Path
+
+          ff = imageio_ffmpeg.get_ffmpeg_exe()
+          video = Path("output/animations.mp4")
+
+          if not video.exists() or video.stat().st_size == 0:
+              raise RuntimeError("animations.mp4 missing")
+
+          subprocess.run([
+              ff,
+              "-hide_banner",
+              "-v", "error",
+              "-xerror",
+              "-i", str(video),
+              "-f", "null",
+              "-"
+          ], check=True)
+
+          print("Final video verified successfully")
+          print(f"File size: {video.stat().st_size / 1048576:.2f} MB")
+          PY
+
+          ls -lh output
+
+      - name: Upload animation pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: bengali-animation-library-v5
+          path: output/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

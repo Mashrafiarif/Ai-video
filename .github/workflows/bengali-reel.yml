@@ -1,10 +1,10 @@
-name: Bengali Reel Animation Pack
+name: Bengali Reel Animation Pack V4
 
 on:
   workflow_dispatch:
     inputs:
       width:
-        description: Rendering resolution
+        description: Animation resolution
         type: choice
         options:
           - '720'
@@ -24,77 +24,74 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Fast dependency installation
         run: |
-          if ! command -v ffmpeg >/dev/null; then
-            sudo apt-get update -qq
-            sudo apt-get install -y ffmpeg
-          fi
-          python -m pip install pillow==11.3.0
-          python -c "from PIL import Image; print('Renderer ready')"
+          python -m pip install pillow==11.3.0 imageio-ffmpeg==0.6.0
+          python -m pip check
+          python -c "import PIL, imageio_ffmpeg; print('Dependencies ready'); print(imageio_ffmpeg.get_ffmpeg_exe())"
 
       - name: Generate animation library
         env:
           WIDTH: ${{ inputs.width }}
+        shell: bash
         run: |
           mkdir -p output
 
           cat > render.py <<'PY'
-          import os
-          import math
-          import json
-          import wave
-          import subprocess
+          import os, math, json, wave, subprocess
           from array import array
           from pathlib import Path
           from PIL import Image, ImageDraw
+          import imageio_ffmpeg
 
-          OUT = Path("output")
-          W = int(os.environ.get("WIDTH", "1080"))
-          H = W * 16 // 9
-          FPS = 30
-          D = 5
+          OUT = Path('output')
+          OUT.mkdir(exist_ok=True)
+
+          FF = imageio_ffmpeg.get_ffmpeg_exe()
+          W = int(os.environ.get('WIDTH', '1080'))
+          H, FPS, D = W * 16 // 9, 30, 5
           S = W / 720
 
-          BG = (10, 17, 29)
-          PANEL = (24, 38, 54)
-          WHITE = (240, 247, 250)
-          TEAL = (63, 227, 193)
-          BLUE = (112, 169, 255)
-          GOLD = (255, 193, 95)
-          RED = (250, 112, 119)
-          MUTE = (79, 103, 126)
+          BG=(10,17,29)
+          PANEL=(24,38,54)
+          WHITE=(240,247,250)
+          TEAL=(63,227,193)
+          BLUE=(112,169,255)
+          GOLD=(255,193,95)
+          RED=(250,112,119)
+          MUTE=(79,103,126)
 
           SCENES = [
-              ("scroll", "Fast social media scrolling"),
-              ("hook", "A powerful attention grabbing hook"),
-              ("compare", "Weak versus strong advertising"),
-              ("audience", "Identifying the ideal customer"),
-              ("problem", "Customer frustration and pain points"),
-              ("solution", "Presenting a product as the solution"),
-              ("price", "Discounts and pricing"),
-              ("trust", "Trust and customer confidence"),
-              ("mind", "Customer psychology and emotions"),
-              ("funnel", "From attention to purchase"),
-              ("growth", "Sales performance and growth"),
-              ("decline", "Poor performance and declining sales"),
-              ("message", "Customer messages and inquiries"),
-              ("cart", "Purchase decisions and checkout"),
-              ("target", "Precise audience targeting"),
-              ("creative", "Testing different advertising creatives"),
-              ("retention", "Viewer attention and retention"),
-              ("conversion", "Successful customer conversion")
+              ('scroll','Fast social media scrolling'),
+              ('hook','Attention grabbing hook'),
+              ('compare','Weak versus strong advertising'),
+              ('audience','Ideal customer'),
+              ('problem','Customer pain points'),
+              ('solution','Product as the solution'),
+              ('price','Discounts and pricing'),
+              ('trust','Trust and confidence'),
+              ('mind','Customer psychology'),
+              ('funnel','Attention to purchase'),
+              ('growth','Sales growth'),
+              ('decline','Declining sales'),
+              ('message','Customer inquiries'),
+              ('cart','Shopping and checkout'),
+              ('target','Audience targeting'),
+              ('creative','Creative testing'),
+              ('retention','Viewer retention'),
+              ('conversion','Successful conversion')
           ]
 
-          def xy(x, y):
-              return round(x*S), round(y*S)
+          def xy(x,y):
+              return round(x*S),round(y*S)
 
-          def rect(x, y, w, h):
-              return (*xy(x,y), *xy(x+w,y+h))
+          def rect(x,y,w,h):
+              return (*xy(x,y),*xy(x+w,y+h))
 
           def rr(d,x,y,w,h,c,r=18,outline=None):
-              if w <= 0 or h <= 0:
+              if w<=0 or h<=0:
                   return
+
               d.rounded_rectangle(
                   rect(x,y,w,h),
                   radius=max(1,round(r*S)),
@@ -116,7 +113,7 @@ jobs:
                   [xy(*p) for p in pts],
                   fill=c,
                   width=max(1,round(w*S)),
-                  joint="curve"
+                  joint='curve'
               )
 
           def ease(t):
@@ -130,42 +127,50 @@ jobs:
           def arrow(d,x,y,x2,y2,c):
               line(d,[(x,y),(x2,y2)],c,6)
               a=math.atan2(y2-y,x2-x)
+
               for k in [-.55,.55]:
                   line(d,[
                       (x2,y2),
-                      (x2-19*math.cos(a+k),
-                       y2-19*math.sin(a+k))
+                      (
+                          x2-19*math.cos(a+k),
+                          y2-19*math.sin(a+k)
+                      )
                   ],c,6)
 
-          def check(d,x,y,c=BG):
+          def check(d,x,y):
               line(d,[
                   (x-23,y),
                   (x-5,y+20),
                   (x+30,y-25)
-              ],c,9)
+              ],BG,9)
 
-          def cross(d,x,y,c):
-              line(d,[(x-20,y-20),(x+20,y+20)],c,8)
-              line(d,[(x-20,y+20),(x+20,y-20)],c,8)
+          def cross(d,x,y):
+              line(d,[(x-20,y-20),(x+20,y+20)],BG,8)
+              line(d,[(x-20,y+20),(x+20,y-20)],BG,8)
 
           def person(d,x,y,c):
               circle(d,x,y-35,22,c)
               rr(d,x-35,y,70,64,c,20)
 
-          def textlines(d,x,y,n=3):
-              for i in range(n):
+          def textlines(d,x,y):
+              for i in range(3):
                   rr(d,x,y+i*25,135-i*20,9,MUTE,5)
 
-          base=Image.new("RGB",(W,H),BG)
+          # Pre-render the background only once.
+
+          base=Image.new('RGB',(W,H),BG)
           bd=ImageDraw.Draw(base)
 
           for y in range(0,1280,4):
               p=max(0,1-abs(y-600)/700)
+
               bd.rectangle(
                   rect(0,y,720,4),
-                  fill=(10+int(p*8),
-                        17+int(p*15),
-                        29+int(p*22))
+                  fill=(
+                      10+int(p*8),
+                      17+int(p*15),
+                      29+int(p*22)
+                  )
               )
 
           for x in range(35,720,52):
@@ -175,6 +180,7 @@ jobs:
           def render(mode,t):
               im=base.copy()
               d=ImageDraw.Draw(im)
+
               a=ease(t/.55)
               p=(math.sin(t*3)+1)/2
               dy=45*(1-a)
@@ -182,146 +188,234 @@ jobs:
 
               rr(d,75,170,100*a,5,TEAL,3)
 
-              if mode in ("scroll","hook"):
+              # 01 and 02: Scrolling and attention.
+
+              if mode in ('scroll','hook'):
                   card(d,185,290+dy,350,670)
                   rr(d,210,325+dy,300,595,BG,24)
 
                   for j in range(3):
-                      offset=(t*80)%110 if mode=="scroll" else 0
+                      offset=(t*80)%110 if mode=='scroll' else 0
                       y=365+j*165-offset+dy
+
                       rr(d,230,y,260,130,PANEL,15)
-                      rr(d,245,y+15,100,100,
-                         TEAL if j==1 else BLUE,12)
+
+                      rr(
+                          d,245,y+15,100,100,
+                          TEAL if j==1 else BLUE,12
+                      )
+
                       rr(d,360,y+30,110,10,WHITE,4)
                       rr(d,360,y+55,75,8,MUTE,4)
 
-                  if mode=="scroll":
+                  if mode=='scroll':
                       circle(d,525,600,40+8*p,TEAL)
                       arrow(d,525,620,525,577,BG)
                   else:
                       circle(d,360,cy,96+18*p,None,GOLD)
                       circle(d,360,cy,115+20*p,None,TEAL)
 
-              elif mode in ("compare","creative"):
+              # Comparison and creative testing.
+
+              elif mode in ('compare','creative'):
                   for j in range(2):
                       x=55+j*315
                       y=365+dy
                       c=RED if j==0 else TEAL
+
                       card(d,x,y,295,420)
-                      rr(d,x+20,y+25,255,170,
-                         MUTE if j==0 else BLUE,15)
+
+                      rr(
+                          d,x+20,y+25,255,170,
+                          MUTE if j==0 else BLUE,15
+                      )
+
                       circle(d,x+147,y+110,45,c)
                       textlines(d,x+30,y+230)
                       circle(d,x+147,y+345,39,c)
-                      if j:
-                          check(d,x+147,y+345)
-                      else:
-                          cross(d,x+147,y+345,BG)
 
-              elif mode in ("audience","target"):
+                      (check if j else cross)(d,x+147,y+345)
+
+              # Audience and targeting.
+
+              elif mode in ('audience','target'):
                   for j in range(9):
                       x=145+(j%3)*215
                       y=390+(j//3)*180+dy
-                      c=TEAL if j==4 else MUTE
-                      person(d,x,y,c)
+
+                      person(
+                          d,x,y,
+                          TEAL if j==4 else MUTE
+                      )
 
                   r=95+10*p
                   circle(d,360,585+dy,r,None,TEAL)
 
-                  if mode=="target":
+                  if mode=='target':
                       circle(d,360,585+dy,r+45,None,BLUE)
-                      line(d,[(360,435+dy),(360,735+dy)],WHITE,2)
-                      line(d,[(210,585+dy),(510,585+dy)],WHITE,2)
 
-              elif mode in ("problem","solution"):
+                      line(
+                          d,[(360,435+dy),(360,735+dy)],
+                          WHITE,2
+                      )
+
+                      line(
+                          d,[(210,585+dy),(510,585+dy)],
+                          WHITE,2
+                      )
+
+              # Problems and solutions.
+
+              elif mode in ('problem','solution'):
                   card(d,125,360+dy,470,500)
 
                   for j in range(3):
                       y=440+j*125+dy
-                      c=RED if mode=="problem" else TEAL
+                      c=RED if mode=='problem' else TEAL
+
                       circle(d,215,y,36,c)
-                      if mode=="problem":
-                          cross(d,215,y,BG)
-                      else:
-                          check(d,215,y)
-                      rr(d,280,y-15,210*ease(t-j*.25),15,WHITE,7)
+
+                      (cross if mode=='problem' else check)(
+                          d,215,y
+                      )
+
+                      rr(
+                          d,280,y-15,
+                          210*ease(t-j*.25),
+                          15,WHITE,7
+                      )
+
                       rr(d,280,y+18,150,9,MUTE,5)
 
-              elif mode=="price":
+              # Pricing and discounts.
+
+              elif mode=='price':
                   card(d,120,390+dy,480,420)
                   rr(d,180,450+dy,360,180,GOLD,28)
+
                   circle(d,275,500+dy,30,BG)
                   circle(d,445,580+dy,30,BG)
-                  line(d,[(275,590+dy),(445,490+dy)],BG,13)
+
+                  line(
+                      d,[(275,590+dy),(445,490+dy)],
+                      BG,13
+                  )
 
                   for j in range(3):
-                      rr(d,205+j*110,685+dy,
-                         85,22+45*ease(t-j*.25),TEAL,9)
+                      rr(
+                          d,205+j*110,685+dy,85,
+                          22+45*ease(t-j*.25),
+                          TEAL,9
+                      )
 
-              elif mode=="trust":
+              # Customer trust.
+
+              elif mode=='trust':
                   card(d,130,350+dy,460,490)
 
-                  shield=[
-                      (360,410+dy),(485,465+dy),
-                      (465,650+dy),(360,745+dy),
-                      (255,650+dy),(235,465+dy)
+                  pts=[
+                      (360,410+dy),
+                      (485,465+dy),
+                      (465,650+dy),
+                      (360,745+dy),
+                      (255,650+dy),
+                      (235,465+dy)
                   ]
-                  d.polygon([xy(*q) for q in shield],fill=TEAL)
+
+                  d.polygon(
+                      [xy(*q) for q in pts],
+                      fill=TEAL
+                  )
+
                   check(d,360,580+dy)
 
                   for j in range(5):
-                      circle(d,240+j*60,790+dy,13+3*p,GOLD)
+                      circle(
+                          d,240+j*60,790+dy,
+                          13+3*p,GOLD
+                      )
 
-              elif mode=="mind":
+              # Customer psychology.
+
+              elif mode=='mind':
                   for j in range(10):
                       angle=j*math.tau/10+t*.15
                       x=360+220*math.cos(angle)
                       y=cy+175*math.sin(angle)
+
                       line(d,[(360,cy),(x,y)],MUTE,3)
-                      circle(d,x,y,14+5*p,
-                             TEAL if j%2 else BLUE)
+
+                      circle(
+                          d,x,y,14+5*p,
+                          TEAL if j%2 else BLUE
+                      )
 
                   circle(d,360,cy,125,PANEL,TEAL)
 
                   for j in range(7):
                       angle=j*math.tau/7
-                      circle(d,
+
+                      circle(
+                          d,
                           360+65*math.cos(angle),
                           cy+60*math.sin(angle),
-                          38,BLUE)
+                          38,BLUE
+                      )
+
                   circle(d,360,cy,38,TEAL)
 
-              elif mode=="funnel":
+              # Marketing funnel.
+
+              elif mode=='funnel':
                   for j,c in enumerate([BLUE,TEAL,GOLD]):
                       w=490-j*130
                       y=365+j*155+dy
+
                       rr(d,(720-w)/2,y,w,115,c,20)
 
                       for k in range(3-j):
-                          circle(d,360+(k-(2-j)/2)*45,
-                                 y+57,15,BG)
+                          circle(
+                              d,
+                              360+(k-(2-j)/2)*45,
+                              y+57,15,BG
+                          )
 
                       if j<2:
-                          arrow(d,360,y+120,360,y+148,MUTE)
+                          arrow(
+                              d,360,y+120,
+                              360,y+148,MUTE
+                          )
 
-              elif mode in ("growth","decline","retention"):
+              # Animated performance charts.
+
+              elif mode in ('growth','decline','retention'):
                   card(d,75,345+dy,570,500)
-                  line(d,[(145,410+dy),(145,770+dy),
-                          (590,770+dy)],MUTE,3)
 
-                  if mode=="growth":
-                      values=[75,130,110,230,305]
-                  elif mode=="decline":
-                      values=[305,230,165,100,55]
-                  else:
-                      values=[305,275,240,220,215]
+                  line(d,[
+                      (145,410+dy),
+                      (145,770+dy),
+                      (590,770+dy)
+                  ],MUTE,3)
+
+                  values={
+                      'growth':[75,130,110,230,305],
+                      'decline':[305,230,165,100,55],
+                      'retention':[305,275,240,220,215]
+                  }[mode]
 
                   for j,h in enumerate(values):
                       v=h*ease(t*1.6-j*.18)
-                      c=RED if mode=="decline" else TEAL
-                      rr(d,170+j*80,770+dy-v,53,v,c,8)
 
-              elif mode=="message":
+                      rr(
+                          d,170+j*80,770+dy-v,
+                          53,v,
+                          RED if mode=='decline' else TEAL,
+                          8
+                      )
+
+              # Messaging interface.
+
+              elif mode=='message':
                   card(d,165,300+dy,390,620)
                   rr(d,190,330+dy,340,555,BG,18)
 
@@ -329,29 +423,46 @@ jobs:
                       q=ease((t-j*.55)*2)
                       x=215 if j%2==0 else 290
                       y=385+j*105+dy
-                      rr(d,x,y,210*q,75,
-                         TEAL if j%2 else PANEL,18)
+
+                      rr(
+                          d,x,y,210*q,75,
+                          TEAL if j%2 else PANEL,
+                          18
+                      )
 
                       if q>.8:
                           rr(d,x+18,y+20,105,9,WHITE,5)
                           rr(d,x+18,y+42,75,7,MUTE,4)
 
-              elif mode=="cart":
+              # Shopping cart.
+
+              elif mode=='cart':
                   card(d,115,375+dy,490,430)
-                  line(d,[(190,440+dy),(240,440+dy),
-                          (280,650+dy),(490,650+dy),
-                          (535,475+dy),(250,475+dy)],BLUE,10)
+
+                  line(d,[
+                      (190,440+dy),
+                      (240,440+dy),
+                      (280,650+dy),
+                      (490,650+dy),
+                      (535,475+dy),
+                      (250,475+dy)
+                  ],BLUE,10)
 
                   for j in range(3):
                       q=ease(t-j*.3)
-                      rr(d,290+j*65,
-                         520+dy-100*(1-q),
-                         50,70,GOLD,10)
+
+                      rr(
+                          d,290+j*65,
+                          520+dy-100*(1-q),
+                          50,70,GOLD,10
+                      )
 
                   circle(d,310,695+dy,25,TEAL)
                   circle(d,465,695+dy,25,TEAL)
 
-              elif mode=="conversion":
+              # Successful conversion.
+
+              elif mode=='conversion':
                   circle(d,360,cy,165+12*p,None,TEAL)
                   circle(d,360,cy,125,TEAL)
                   check(d,360,cy)
@@ -359,145 +470,208 @@ jobs:
                   for j in range(14):
                       angle=j*math.tau/14
                       r=180+100*ease(t)
-                      circle(d,
-                             360+r*math.cos(angle),
-                             cy+r*math.sin(angle),
-                             7+4*p,
-                             [TEAL,BLUE,GOLD][j%3])
+
+                      circle(
+                          d,
+                          360+r*math.cos(angle),
+                          cy+r*math.sin(angle),
+                          7+4*p,
+                          [TEAL,BLUE,GOLD][j%3]
+                      )
 
               if t<.15:
-                  im=Image.blend(base,im,ease(t/.15))
+                  im=Image.blend(
+                      base,im,ease(t/.15)
+                  )
 
               return im
 
-          duration=len(SCENES)*D
-          frames=duration*FPS
+          # Export scene timestamps for Claude.
 
-          scene_map=[]
-
-          for i,(mode,description) in enumerate(SCENES):
-              scene_map.append({
-                  "scene":i+1,
-                  "start_seconds":i*D,
-                  "end_seconds":(i+1)*D,
-                  "animation":mode,
-                  "description":description
-              })
-
-          (OUT/"scene_map.json").write_text(
-              json.dumps(scene_map,indent=2),
-              encoding="utf-8"
-          )
-
-          lines=[
-              f"{s['start_seconds']:03d}s - "
-              f"{s['end_seconds']:03d}s: "
-              f"{s['description']}"
-              for s in scene_map
+          scene_map=[
+              dict(
+                  scene=i+1,
+                  start_seconds=i*D,
+                  end_seconds=(i+1)*D,
+                  animation=mode,
+                  description=desc
+              )
+              for i,(mode,desc) in enumerate(SCENES)
           ]
 
-          (OUT/"animation_index.txt").write_text(
-              "\n".join(lines),
-              encoding="utf-8"
+          (OUT/'scene_map.json').write_text(
+              json.dumps(scene_map,indent=2),
+              encoding='utf-8'
           )
 
+          (OUT/'animation_index.txt').write_text(
+              '\n'.join(
+                  f"{s['start_seconds']:03d}s - "
+                  f"{s['end_seconds']:03d}s: "
+                  f"{s['description']}"
+                  for s in scene_map
+              ),
+              encoding='utf-8'
+          )
+
+          # Use bundled FFmpeg directly.
+          # No apt installation or sudo required.
+
           video=subprocess.Popen([
-              "ffmpeg","-hide_banner","-loglevel","error","-y",
-              "-f","rawvideo","-pix_fmt","rgb24",
-              "-s",f"{W}x{H}","-r",str(FPS),
-              "-i","-","-an",
-              "-c:v","libx264",
-              "-preset","veryfast",
-              "-crf","19",
-              "-pix_fmt","yuv420p",
-              "silent.mp4"
+              FF,
+              '-hide_banner',
+              '-loglevel','error',
+              '-y',
+              '-f','rawvideo',
+              '-pix_fmt','rgb24',
+              '-s',f'{W}x{H}',
+              '-r',str(FPS),
+              '-i','-',
+              '-an',
+              '-c:v','libx264',
+              '-preset','veryfast',
+              '-crf','19',
+              '-pix_fmt','yuv420p',
+              '-threads','4',
+              'silent.mp4'
           ],stdin=subprocess.PIPE)
 
           try:
-              for i,(mode,description) in enumerate(SCENES):
+              for i,(mode,desc) in enumerate(SCENES):
                   print(
-                      f"Rendering {i+1}/{len(SCENES)}: {description}",
+                      f'Rendering {i+1}/{len(SCENES)}: {desc}',
                       flush=True
                   )
+
                   for f in range(D*FPS):
                       video.stdin.write(
                           render(mode,f/FPS).tobytes()
                       )
+
           finally:
               video.stdin.close()
               status=video.wait()
 
-          if status!=0:
-              raise RuntimeError("Video rendering failed")
+          if status:
+              raise RuntimeError('Video rendering failed')
 
-          # Original synchronized synthetic sound effects.
+          # Optimized original sound effects.
+          # Calculate only the samples containing sound.
+
           RATE=44100
-          samples=array("h")
+          samples=array('h')
 
           for index,(mode,_) in enumerate(SCENES):
               freq=420+(index%6)*80
+              clip=[0.0]*(D*RATE)
 
-              for n in range(D*RATE):
-                  t=n/RATE
-                  value=0.0
+              def add(start,length,fn):
+                  offset=round(start*RATE)
 
-                  if t<.25:
-                      envelope=math.sin(math.pi*t/.25)**2
-                      value+=.12*envelope*math.sin(
+                  for j in range(
+                      min(
+                          round(length*RATE),
+                          len(clip)-offset
+                      )
+                  ):
+                      clip[offset+j]+=fn(j/RATE)
+
+              add(
+                  0,.25,
+                  lambda t:
+                      .12*math.sin(math.pi*t/.25)**2
+                      *math.sin(
                           math.tau*(freq*t+700*t*t)
                       )
+              )
 
-                  for k,event in enumerate([.55,.9,1.25]):
-                      u=t-event
-                      if 0<=u<.10:
-                          value+=.07*math.exp(-35*u)*math.sin(
-                              math.tau*(freq+k*120)*u
+              for k,event in enumerate([.55,.9,1.25]):
+                  add(
+                      event,.10,
+                      lambda t,k=k:
+                          .07*math.exp(-35*t)
+                          *math.sin(
+                              math.tau*(freq+k*120)*t
                           )
-
-                  if mode in ("solution","trust","conversion"):
-                      u=t-1.5
-                      if 0<=u<.35:
-                          value+=.08*math.exp(-10*u)*(
-                              math.sin(math.tau*660*u)+
-                              math.sin(math.tau*880*u)
-                          )
-
-                  samples.append(
-                      int(max(-1,min(1,value))*32767)
                   )
 
+              if mode in ('solution','trust','conversion'):
+                  add(
+                      1.5,.35,
+                      lambda t:
+                          .08*math.exp(-10*t)*(
+                              math.sin(math.tau*660*t)
+                              +math.sin(math.tau*880*t)
+                          )
+                  )
+
+              samples.extend(
+                  int(max(-1,min(1,v))*32767)
+                  for v in clip
+              )
+
           with wave.open(
-              str(OUT/"animation_sfx.wav"),"wb"
+              str(OUT/'animation_sfx.wav'),'wb'
           ) as f:
-              f.setparams((1,2,RATE,0,"NONE","not compressed"))
+              f.setparams(
+                  (1,2,RATE,0,'NONE','not compressed')
+              )
               f.writeframes(samples.tobytes())
 
+          print('Combining animation and SFX...',flush=True)
+
           subprocess.run([
-              "ffmpeg","-hide_banner","-loglevel","error","-y",
-              "-i","silent.mp4",
-              "-i",str(OUT/"animation_sfx.wav"),
-              "-c:v","copy",
-              "-c:a","aac",
-              "-b:a","160k",
-              "-shortest",
-              "-movflags","+faststart",
-              str(OUT/"animations.mp4")
+              FF,
+              '-hide_banner',
+              '-loglevel','error',
+              '-y',
+              '-i','silent.mp4',
+              '-i',str(OUT/'animation_sfx.wav'),
+              '-c:v','copy',
+              '-c:a','aac',
+              '-b:a','160k',
+              '-shortest',
+              '-movflags','+faststart',
+              str(OUT/'animations.mp4')
           ],check=True)
 
-          print("SUCCESS",flush=True)
-          print(f"Duration: {duration} seconds")
-          print(f"Resolution: {W}x{H}")
-          print(f"Animations: {len(SCENES)}")
+          print(
+              f'SUCCESS: {len(SCENES)*D}s, '
+              f'{W}x{H}, {FPS}fps',
+              flush=True
+          )
           PY
 
           python -u render.py
 
       - name: Verify final render
         run: |
-          ffprobe -v error \
-            -show_entries format=duration,size \
-            -show_entries stream=width,height,codec_name \
-            output/animations.mp4
+          python - <<'PY'
+          import subprocess
+          import imageio_ffmpeg
+          from pathlib import Path
+
+          video = Path("output/animations.mp4")
+
+          if not video.exists() or video.stat().st_size == 0:
+              raise RuntimeError("Rendered video missing")
+
+          ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+
+          subprocess.run([
+              ffmpeg,
+              "-hide_banner",
+              "-v", "error",
+              "-xerror",
+              "-i", str(video),
+              "-f", "null",
+              "-"
+          ], check=True)
+
+          print("Final video verified successfully")
+          print(f"File size: {video.stat().st_size/1048576:.2f} MB")
+          PY
+
           ls -lh output
 
       - name: Upload animation pack

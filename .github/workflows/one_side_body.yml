@@ -1,0 +1,378 @@
+name: MeanwhileMash - One Side Body
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_sec:
+        description: "Video duration in seconds"
+        required: false
+        default: "32"
+      fps:
+        description: "Frames per second"
+        required: false
+        default: "24"
+
+jobs:
+  render-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          pip install pillow numpy scipy imageio imageio-ffmpeg
+
+      - name: Render MeanwhileMash episode
+        shell: bash
+        run: |
+          cat > render.py <<'PY'
+          import os, math, subprocess
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont
+          import imageio.v2 as imageio
+          from scipy.io.wavfile import write as wavwrite
+
+          W, H = 1080, 1920
+          BG = (16, 24, 32)
+          LIME = (198, 255, 0)
+          WHITE = (245, 245, 245)
+          SLATE = (100, 116, 139)
+          RED = (255, 106, 106)
+          LIGHT = (220, 225, 230)
+          DARK2 = (26, 38, 49)
+          fps = int(os.environ.get('FPS', '${{ github.event.inputs.fps }}' or '24'))
+          duration = float(os.environ.get('DURATION', '${{ github.event.inputs.duration_sec }}' or '32'))
+          total_frames = int(duration * fps)
+
+          OUT = 'out'
+          os.makedirs(OUT, exist_ok=True)
+
+          font_path = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+          font_path_reg = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+          def F(size, bold=True):
+              path = font_path if bold else font_path_reg
+              return ImageFont.truetype(path, size)
+
+          def ease(t):
+              t = max(0.0, min(1.0, t))
+              return 3*t*t - 2*t*t*t
+
+          def lerp(a, b, t):
+              return a + (b-a)*t
+
+          def scene_at(sec):
+              # (start, end, name)
+              scenes = [
+                  (0, 4.5, 'hook'),
+                  (4.5, 9.5, 'stronger'),
+                  (9.5, 15.0, 'bigger'),
+                  (15.0, 21.0, 'imbalanced'),
+                  (21.0, 26.5, 'strain'),
+                  (26.5, duration, 'balance'),
+              ]
+              for s,e,n in scenes:
+                  if s <= sec < e:
+                      return n, s, e
+              return scenes[-1][2], scenes[-1][0], scenes[-1][1]
+
+          def text(draw, xy, txt, size, fill, anchor='mm', bold=True, stroke=None):
+              font = F(size, bold)
+              if stroke:
+                  draw.text(xy, txt, font=font, fill=fill, anchor=anchor, stroke_width=stroke[0], stroke_fill=stroke[1])
+              else:
+                  draw.text(xy, txt, font=font, fill=fill, anchor=anchor)
+
+          def centered_box(draw, x1,y1,x2,y2, fill, outline=None, radius=28):
+              draw.rounded_rectangle([x1,y1,x2,y2], radius=radius, fill=fill, outline=outline, width=3 if outline else 1)
+
+          def draw_brand(draw):
+              text(draw, (120, 92), 'meanwhile', 42, WHITE, anchor='lm')
+              text(draw, (330, 92), 'mash', 42, LIME, anchor='lm')
+
+          def draw_grid(draw):
+              for x in range(0, W, 90):
+                  c = (22,33,44)
+                  draw.line((x,0,x,H), fill=c, width=1)
+              for y in range(0, H, 90):
+                  c = (22,33,44)
+                  draw.line((0,y,W,y), fill=c, width=1)
+
+          def draw_arrow(draw, x1,y1,x2,y2, color, width=10):
+              draw.line((x1,y1,x2,y2), fill=color, width=width)
+              ang = math.atan2(y2-y1, x2-x1)
+              ah=28
+              p1 = (x2 - ah*math.cos(ang-math.pi/6), y2 - ah*math.sin(ang-math.pi/6))
+              p2 = (x2 - ah*math.cos(ang+math.pi/6), y2 - ah*math.sin(ang+math.pi/6))
+              draw.polygon([(x2,y2), p1, p2], fill=color)
+
+          def draw_person(draw, cx, cy, scale=1.0, left_highlight=False, right_highlight=False,
+                          left_muscle=1.0, right_muscle=1.0, tilt=0.0, warnings=False, balanced=False):
+              # torso
+              shoulder_w = 220*scale
+              hip_w = 155*scale
+              torso_h = 300*scale
+              head_r = 78*scale
+              left_col = LIME if left_highlight else LIGHT
+              right_col = LIME if right_highlight else LIGHT
+              outline = (90,100,110)
+              tx = cx
+              # head
+              draw.ellipse((tx-head_r, cy-520*scale-head_r, tx+head_r, cy-520*scale+head_r), fill=WHITE, outline=outline, width=4)
+              # neck
+              draw.rounded_rectangle((tx-25*scale, cy-450*scale, tx+25*scale, cy-395*scale), radius=int(10*scale), fill=WHITE, outline=outline, width=3)
+              # torso left/right polygons
+              shoulder_y = cy-390*scale
+              hip_y = cy-120*scale
+              tilt_px = tilt*110*scale
+              left_pts = [(tx, shoulder_y+tilt_px*0.20), (tx-shoulder_w/2, shoulder_y+tilt_px), (tx-hip_w/2, hip_y), (tx, hip_y)]
+              right_pts = [(tx, shoulder_y+tilt_px*0.20), (tx+shoulder_w/2, shoulder_y-tilt_px), (tx+hip_w/2, hip_y), (tx, hip_y)]
+              draw.polygon(left_pts, fill=left_col, outline=outline)
+              draw.polygon(right_pts, fill=right_col, outline=outline)
+              # abs line
+              draw.line((tx, shoulder_y-5, tx, hip_y), fill=outline, width=3)
+              # arms
+              def arm(side=-1, muscle=1.0, col=WHITE):
+                  sx = tx + side*shoulder_w/2
+                  sy = shoulder_y + (tilt_px if side<0 else -tilt_px)
+                  ex = sx + side*(160*scale)
+                  ey = sy + 210*scale
+                  wristx = ex + side*(20*scale)
+                  wristy = ey + 180*scale
+                  upper = int(38*scale*muscle)
+                  lower = int(32*scale*muscle*0.95)
+                  draw.line((sx,sy,ex,ey), fill=col, width=upper)
+                  draw.line((ex,ey,wristx,wristy), fill=col, width=lower)
+                  # hand
+                  draw.ellipse((wristx-26*scale, wristy-26*scale, wristx+26*scale, wristy+26*scale), fill=col, outline=outline, width=3)
+                  return (sx,sy,ex,ey,wristx,wristy)
+              la = arm(-1, left_muscle, left_col)
+              ra = arm(1, right_muscle, right_col)
+              # legs
+              def leg(side=-1, muscle=1.0, col=WHITE):
+                  sx = tx + side*hip_w/2*0.78
+                  sy = hip_y
+                  kx = sx + side*(40*scale)
+                  ky = sy + 250*scale
+                  ax = sx + side*(30*scale)
+                  ay = ky + 250*scale
+                  upper = int(50*scale*muscle)
+                  lower = int(40*scale*muscle*0.95)
+                  draw.line((sx,sy,kx,ky), fill=col, width=upper)
+                  draw.line((kx,ky,ax,ay), fill=col, width=lower)
+                  # foot
+                  draw.rounded_rectangle((ax-46*scale, ay-20*scale, ax+66*scale, ay+18*scale), radius=int(10*scale), fill=col, outline=outline, width=3)
+                  return (sx,sy,kx,ky,ax,ay)
+              ll = leg(-1, left_muscle, left_col)
+              rl = leg(1, right_muscle, right_col)
+              # dumbbell on highlighted side during earlier scenes
+              if left_highlight and not balanced:
+                  wx, wy = la[4], la[5]
+                  draw.rounded_rectangle((wx-120, wy-14, wx+18, wy+14), radius=10, fill=LIME, outline=None)
+                  for off in [(-138,-8),(-170,-18),(24,-8),(56,-18)]:
+                      ox, oy = off
+                      draw.rounded_rectangle((wx+ox, wy+oy, wx+ox+18, wy-oy), radius=4, fill=WHITE)
+              if warnings:
+                  # warning circles on right shoulder and left knee (example strain)
+                  for x,y in [(ra[0]-10, ra[1]), (ll[2]-20, ll[3])]:
+                      draw.ellipse((x-54,y-54,x+54,y+54), outline=RED, width=8)
+                      text(draw, (x,y+4), '!', 62, RED)
+              if balanced:
+                  draw_arrow(draw, tx-300, cy-20, tx-170, cy-20, LIME, 10)
+                  draw_arrow(draw, tx+300, cy-20, tx+170, cy-20, LIME, 10)
+
+          def draw_counter(draw, x, y, value, label):
+              centered_box(draw, x-210, y-75, x+210, y+75, (22,35,45), outline=(75,90,100), radius=28)
+              text(draw, (x,y-8), value, 62, LIME)
+              text(draw, (x,y+48), label, 26, WHITE)
+
+          writer = imageio.get_writer(os.path.join(OUT, 'video_noaudio.mp4'), fps=fps, codec='libx264', quality=8)
+          for i in range(total_frames):
+              sec = i / fps
+              scene, ss, se = scene_at(sec)
+              local = (sec-ss)/(se-ss) if se>ss else 0
+              img = Image.new('RGB', (W,H), BG)
+              draw = ImageDraw.Draw(img)
+              draw_grid(draw)
+              draw_brand(draw)
+              # subtle vignette bars
+              draw.rectangle((0,0,W,170), fill=(12,18,24))
+              draw.rectangle((0,H-180,W,H), fill=(12,18,24))
+              draw_brand(draw)
+
+              if scene == 'hook':
+                  p = ease(local)
+                  for r in [120, 180, 240]:
+                      rr = r + p*120
+                      alpha = max(0, 180 - int((rr-r)*1.2))
+                      draw.ellipse((540-rr,960-rr,540+rr,960+rr), outline=(70,90,80), width=4)
+                  text(draw, (540, 275), 'WHAT IF YOU TRAINED', 62, WHITE)
+                  text(draw, (540, 350), 'ONLY ONE SIDE?', 78, LIME)
+                  draw_person(draw, 540, 1150, scale=1.04, left_highlight=True, right_highlight=False,
+                              left_muscle=1.15+0.05*p, right_muscle=1.0)
+                  centered_box(draw, 170, 1520, 910, 1620, DARK2, outline=(70,80,90), radius=28)
+                  text(draw, (540,1570), 'ONE SIDE GETS THE WORK.', 42, WHITE)
+
+              elif scene == 'stronger':
+                  p = ease(local)
+                  text(draw, (540, 280), 'AT FIRST...', 56, WHITE)
+                  text(draw, (540, 350), 'IT LOOKS STRONGER.', 74, LIME)
+                  lm = 1.0 + 0.45*p
+                  ll = 1.0 + 0.28*p
+                  draw_person(draw, 540, 1130, scale=1.05, left_highlight=True, right_highlight=False,
+                              left_muscle=lm, right_muscle=1.0, tilt=0.02)
+                  draw_counter(draw, 265, 1570, f'{int(50+50*p)}%', 'LEFT-SIDE STRENGTH')
+                  draw_counter(draw, 815, 1570, f'{int(50+5*p)}%', 'RIGHT-SIDE STRENGTH')
+
+              elif scene == 'bigger':
+                  p = ease(local)
+                  text(draw, (540, 280), 'ONE ARM. ONE LEG.', 58, WHITE)
+                  text(draw, (540, 350), 'ONE SIDE STARTS DOMINATING.', 62, LIME)
+                  draw_person(draw, 540, 1130, scale=1.08, left_highlight=True, right_highlight=False,
+                              left_muscle=1.45, right_muscle=0.96, tilt=0.06*p)
+                  centered_box(draw, 245, 1500, 835, 1605, (28,40,48), outline=(80,90,100), radius=22)
+                  text(draw, (540,1554), 'MORE MUSCLE  •  MORE POWER', 40, WHITE)
+
+              elif scene == 'imbalanced':
+                  p = ease(local)
+                  text(draw, (540, 275), 'BUT OVER TIME...', 58, WHITE)
+                  text(draw, (540, 352), 'YOUR BODY CAN GO OFF-BALANCE.', 60, LIME)
+                  draw_person(draw, 540, 1130, scale=1.08, left_highlight=True, right_highlight=False,
+                              left_muscle=1.38, right_muscle=0.94, tilt=0.18*p)
+                  # center line and arrows
+                  draw.line((540, 470, 560, 1470), fill=RED, width=6)
+                  draw_arrow(draw, 800, 1070, 900, 1180, RED, 9)
+                  draw_arrow(draw, 280, 1340, 170, 1460, RED, 9)
+                  text(draw, (830, 1030), 'POSTURE', 34, RED)
+                  text(draw, (215, 1520), 'AWKWARD MOVEMENT', 34, RED, anchor='lm')
+
+              elif scene == 'strain':
+                  p = ease(local)
+                  text(draw, (540, 280), 'AND THAT CAN MEAN...', 56, WHITE)
+                  text(draw, (540, 352), 'MORE STRAIN ON JOINTS.', 72, RED)
+                  draw_person(draw, 540, 1130, scale=1.06, left_highlight=True, right_highlight=False,
+                              left_muscle=1.30, right_muscle=0.96, tilt=0.12, warnings=True)
+                  draw_counter(draw, 540, 1570, 'RISK ↑', 'UNEQUAL STRESS')
+
+              elif scene == 'balance':
+                  p = ease(local)
+                  text(draw, (540, 275), 'YES, ONE-SIDED TRAINING', 52, WHITE)
+                  text(draw, (540, 346), 'CAN BUILD STRENGTH...', 68, LIME)
+                  text(draw, (540, 432), 'BUT BOTH SIDES SHOULD GROW TOGETHER.', 46, WHITE)
+                  draw_person(draw, 540, 1130, scale=1.05, left_highlight=True, right_highlight=True,
+                              left_muscle=1.18, right_muscle=1.18, tilt=0.0, balanced=True)
+                  centered_box(draw, 210, 1490, 870, 1610, (24,40,30), outline=(140,180,90), radius=26)
+                  text(draw, (540,1552), 'BALANCE BUILDS A BETTER BODY.', 42, WHITE)
+                  text(draw, (540, 1710), 'CURIOUSITY WITHOUT LIMITS.', 28, SLATE)
+
+              writer.append_data(np.array(img))
+          writer.close()
+
+          # Audio design
+          sr = 48000
+          t = np.linspace(0, duration, int(sr*duration), endpoint=False)
+          audio = np.zeros_like(t)
+
+          def add_tone(start, dur, freq=440, amp=0.25, kind='sine', attack=0.01, decay=0.03):
+              i0 = max(0, int(start*sr)); i1 = min(len(audio), int((start+dur)*sr))
+              if i1 <= i0: return
+              tt = np.linspace(0, dur, i1-i0, endpoint=False)
+              if kind == 'sine':
+                  wave = np.sin(2*np.pi*freq*tt)
+              elif kind == 'square':
+                  wave = np.sign(np.sin(2*np.pi*freq*tt))
+              elif kind == 'noise':
+                  rng = np.random.default_rng(i0+i1)
+                  wave = rng.normal(0,1,len(tt))
+              else:
+                  wave = np.sin(2*np.pi*freq*tt)
+              env = np.ones_like(tt)
+              a = min(len(tt), max(1,int(sr*attack)))
+              d = min(len(tt), max(1,int(sr*decay)))
+              env[:a] = np.linspace(0,1,a)
+              env[-d:] *= np.linspace(1,0,d)
+              audio[i0:i1] += amp * wave * env
+
+          def add_whoosh(start, dur=0.25, f0=250, f1=850, amp=0.18):
+              i0 = int(start*sr); i1 = min(len(audio), int((start+dur)*sr))
+              if i1 <= i0: return
+              tt = np.linspace(0, dur, i1-i0, endpoint=False)
+              freq = np.linspace(f0, f1, len(tt))
+              phase = 2*np.pi*np.cumsum(freq)/sr
+              wave = np.sin(phase)
+              noise = np.random.default_rng(i0).normal(0, 0.35, len(tt))
+              env = np.hanning(len(tt))
+              audio[i0:i1] += amp*(0.65*wave + 0.35*noise)*env
+
+          def add_counter(start, end, interval=0.11, freq=900, amp=0.09):
+              tm = start
+              flip = 0
+              while tm < end:
+                  add_tone(tm, 0.05, freq + flip*80, amp, 'square', 0.003, 0.02)
+                  tm += interval
+                  flip = 1-flip
+
+          # Global subtle pulse bed
+          for k in np.arange(0, duration, 1.0):
+              add_tone(k, 0.18, 80, 0.025, 'sine', 0.01, 0.12)
+
+          # Hook impact + rings
+          add_tone(0.00, 0.55, 58, 0.32, 'sine', 0.005, 0.22)
+          add_whoosh(0.16, 0.22, 450, 950, 0.12)
+          for tm in [0.55, 1.05, 1.55]:
+              add_tone(tm, 0.14, 520, 0.10, 'sine', 0.005, 0.08)
+          add_whoosh(2.1, 0.28, 300, 880, 0.14)
+          add_tone(2.35, 0.18, 640, 0.16, 'square', 0.002, 0.06)
+
+          # stronger counter scene
+          add_counter(4.8, 8.9, interval=0.10, freq=980, amp=0.07)
+          for tm in [5.8, 6.8, 7.8, 8.8]:
+              add_tone(tm, 0.1, 420, 0.10, 'sine', 0.005, 0.05)
+
+          # more muscle / dominance scene
+          add_whoosh(9.7, 0.25, 200, 650, 0.12)
+          for tm in [10.8, 12.2, 13.6]:
+              add_tone(tm, 0.12, 460, 0.12, 'sine', 0.005, 0.06)
+
+          # imbalance scene
+          for tm in [15.6, 16.7, 17.9, 19.0, 20.1]:
+              add_tone(tm, 0.08, 700, 0.07, 'square', 0.003, 0.03)
+          add_whoosh(15.2, 0.28, 500, 180, 0.16)
+          add_whoosh(18.4, 0.26, 600, 250, 0.14)
+
+          # strain scene
+          add_tone(21.1, 0.20, 130, 0.18, 'sine', 0.01, 0.1)
+          for tm in [22.2, 23.4, 24.7, 25.8]:
+              add_tone(tm, 0.10, 760, 0.10, 'square', 0.003, 0.04)
+              add_tone(tm+0.03, 0.14, 220, 0.10, 'noise', 0.002, 0.08)
+
+          # balance ending
+          add_whoosh(26.6, 0.30, 220, 720, 0.18)
+          for tm in [27.5, 28.8, 30.2]:
+              add_tone(tm, 0.18, 480, 0.14, 'sine', 0.005, 0.08)
+          add_tone(duration-1.2, 0.45, 260, 0.18, 'sine', 0.01, 0.22)
+          add_tone(duration-0.72, 0.22, 620, 0.12, 'square', 0.004, 0.06)
+          add_tone(duration-0.46, 0.28, 780, 0.09, 'sine', 0.005, 0.10)
+
+          # normalize
+          audio = np.clip(audio, -0.9, 0.9)
+          stereo = np.stack([audio, audio], axis=1)
+          wavwrite(os.path.join(OUT, 'sfx.wav'), sr, (stereo * 32767).astype(np.int16))
+
+          subprocess.run([
+              'ffmpeg','-y','-i',os.path.join(OUT,'video_noaudio.mp4'),'-i',os.path.join(OUT,'sfx.wav'),
+              '-c:v','copy','-c:a','aac','-b:a','192k','-shortest',os.path.join(OUT,'MeanwhileMash_One_Side_Body.mp4')
+          ], check=True)
+          PY
+          DURATION="${{ github.event.inputs.duration_sec }}" FPS="${{ github.event.inputs.fps }}" python render.py
+
+      - name: Upload video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeanwhileMash_One_Side_Body
+          path: out/MeanwhileMash_One_Side_Body.mp4

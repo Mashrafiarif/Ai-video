@@ -1,0 +1,177 @@
+
+# MeanwhileMash F07 | Level 1.2 V5 | Enhanced 2.5D anatomy
+# Science: https://pubmed.ncbi.nlm.nih.gov/28936703/
+# https://pubmed.ncbi.nlm.nih.gov/29446711/
+name: MeanwhileMash - One Side Training F07
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Voiceover duration in seconds (20-60)
+        required: true
+        default: '42'
+      quality:
+        description: Render resolution
+        type: choice
+        options: [preview, full]
+        default: full
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install pillow numpy
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Render visuals and original SFX
+        env:
+          DURATION: ${{ inputs.duration }}
+          QUALITY: ${{ inputs.quality }}
+        run: |
+          cat > render.py <<'MM_RENDERER'
+          import argparse,math,wave,subprocess
+          from functools import lru_cache
+          import numpy as np
+          from PIL import Image,ImageDraw,ImageFont
+          p=argparse.ArgumentParser();p.add_argument('--width',type=int,default=1080);p.add_argument('--duration',type=float,default=42);a=p.parse_args()
+          W=a.width;H=W*16//9;S=W/720;D=a.duration;FPS=30;SR=48000
+          assert 20<=D<=60
+          L='#C6FF00';F='#F5F5F5';G='#64748B';K='#101820';M='#384953';C='#8BDDEB'
+          T=[0,4,9,14,18,24,29,34,38,42]
+          def clamp(v):return max(0,min(1,v))
+          def e(v):v=clamp(v);return v*v*(3-2*v)
+          def pt(x,y):return round(x*S),round(y*S)
+          @lru_cache(None)
+          def font(n):return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',max(1,round(n*S)))
+          def tx(d,x,y,t,n=30,c=F,anchor='mm',lim=620):
+           while font(n).getlength(t)>lim*S and n>10:n-=1
+           d.text(pt(x,y),t,font=font(n),fill=c,anchor=anchor)
+          def box(d,x,y,w,h,c,r=0):d.rounded_rectangle([pt(x,y),pt(x+w,y+h)],radius=round(r*S),fill=c)
+          def ell(d,x,y,rx,ry,c,o=None,sw=1):d.ellipse([pt(x-rx,y-ry),pt(x+rx,y+ry)],fill=c,outline=o,width=max(1,round(sw*S)))
+          def line(d,pts,c,w=2):d.line([pt(*v) for v in pts],fill=c,width=max(1,round(w*S)),joint='curve')
+          def poly(d,pts,c):d.polygon([pt(*v) for v in pts],fill=c)
+          def shade(c,f):return tuple(min(255,round(int(c[j:j+2],16)*f)) for j in (1,3,5))
+          def ball(d,x,y,rx,ry,c):
+           for j in range(9):
+            f=j/9;ell(d,x-rx*.16*f,y-ry*.20*f,rx*(1-.66*f),ry*(1-.66*f),shade(c,.48+.72*f))
+          def limb(d,a,b,r1,r2,c,fib=False):
+           ax,ay=a;bx,by=b;v=math.hypot(bx-ax,by-ay);nx=-(by-ay)/v;ny=(bx-ax)/v
+           for j in range(12):
+            u=-1+j/6;z=u+1/6;poly(d,[(ax+nx*r1*u,ay+ny*r1*u),(bx+nx*r2*u,by+ny*r2*u),(bx+nx*r2*z,by+ny*r2*z),(ax+nx*r1*z,ay+ny*r1*z)],shade(c,.50+.65*math.sin(math.pi*(j+.5)/12)))
+           if fib:
+            for u in [-.5,-.15,.2,.55]:line(d,[(ax+nx*r1*u,ay+ny*r1*u),(bx+nx*r2*u,by+ny*r2*u)],shade(c,.95),1)
+          def weight(d,x,y,s=1):
+           limb(d,(x-47*s,y),(x+47*s,y),6*s,6*s,'#A5B6C1')
+           for k in [-1,1]:
+            box(d,x+k*46*s-15*s,y-26*s,30*s,52*s,'#34434E',5*s);ell(d,x+k*46*s-8*s,y,12*s,26*s,'#536875');ell(d,x+k*46*s+9*s,y,8*s,24*s,'#202E37')
+          def body(d,curl=0,g=0,load=True):
+           # Front view: anatomical right is viewer left.
+           ell(d,360,952,150,20,'#0A1219')
+           for k in [-1,1]:
+            x=360+k*56;limb(d,(x,682),(x+k*4,815),38,23,'#8093A0');ball(d,x+k*4,815,23,24,'#93A6AE');limb(d,(x+k*4,815),(x+k*12,936),25,14,'#8499A4');ell(d,x+k*13,940,35,13,'#A8B6BC')
+           limb(d,(360,410),(360,645),103,63,'#93A6AE');limb(d,(360,370),(360,415),23,32,'#A6B7BF');ball(d,360,324,49,59,'#C0CED0');poly(d,[(291,638),(429,638),(434,695),(383,721),(360,701),(337,721),(286,695)],'#455964')
+           for k in [-1,1]:
+            c=L if k==-1 else '#A1B1B8';r=g if k==-1 else 0;sh=(360+k*113,443);el=(360+k*146,579);theta=2.8*curl if k==-1 else 0;hand=(el[0]-115*math.sin(theta),el[1]+115*math.cos(theta))
+            ball(d,*sh,32+8*r,40,c);limb(d,(360+k*43,452),(360+k*76,505),32,20,c,True);limb(d,sh,el,34+18*r,20+6*r,c,True);ball(d,*el,20,20,c);limb(d,el,hand,23+6*r,13,c,True);ball(d,*hand,17,17,'#B6C4C9')
+            if k==-1 and load:weight(d,*hand,.82)
+           for j in range(3):
+            for k in [-1,1]:box(d,360+(8 if k>0 else -60),535+j*27,52,20,'#708891',6)
+          def brain(d):
+           for k in [-1,1]:
+            for x,y,r in [(22,-39,43),(58,-26,40),(73,13,40),(44,49,39),(13,31,33)]:ball(d,360+k*x*1.6,480+y*1.6,r*1.6,r*1.25,'#809AA8')
+            for x,y in [(25,-38),(54,5),(35,38)]:line(d,[(360+k*(x-13)*1.6,480+(y-8)*1.6),(360+k*x*1.6,480+y*1.6),(360+k*(x+13)*1.6,480+(y-9)*1.6)],'#455D6A',3)
+           line(d,[(360,380),(360,570)],K,4);limb(d,(360,570),(360,640),16,10,'#A0B7BF')
+          def signal(d,pts,f,c):
+           line(d,pts,M,7);line(d,pts,c,2);lens=[math.dist(a,b) for a,b in zip(pts,pts[1:])];v=clamp(f)*sum(lens)
+           for j,n in enumerate(lens):
+            if v<=n or j==len(lens)-1:
+             u=clamp(v/n);a,b=pts[j],pts[j+1];x=a[0]+(b[0]-a[0])*u;y=a[1]+(b[1]-a[1])*u;ell(d,x,y,15,15,None,c,2);ell(d,x,y,7,7,c);break
+            v-=n
+          Y,X=np.ogrid[:H,:W];v=np.clip(1-np.sqrt(((X/W-.5)*1.5)**2+((Y/H-.5)*1.1)**2),0,1)**2
+          back=Image.fromarray(np.uint8(np.array([16,24,32])+v[:,:,None]*np.array([28,40,46])));del X,Y,v
+          HEAD=[('TRAIN ONLY ONE SIDE?','FOR SIX MONTHS'),('THE TRAINED SIDE','CAN GROW'),('THE SURPRISE','STRENGTH CAN TRANSFER'),('CROSS-EDUCATION','ONE SIDE HELPS THE OTHER'),('INSIDE YOUR BRAIN','NEURAL ADAPTATION'),('STRENGTH ≠ SIZE','DIFFERENT ADAPTATIONS'),('OVER TIME','IMBALANCE CAN DEVELOP'),('ONE NERVOUS SYSTEM','TWO SIDES')]
+          FOOT=['HYPOTHETICAL TRAINING SCENARIO','GROWTH VARIES BY INDIVIDUAL','OPPOSITE ARM: NO DIRECT TRAINING','DOCUMENTED STRENGTH-TRANSFER EFFECT','SIMPLIFIED NEURAL PATHWAYS','NO FIXED PERCENTAGES IMPLIED','ILLUSTRATIVE, NOT A PREDICTION','YOUR BODY IS CONNECTED']
+          def frame(sec):
+           t=sec*42/D;i=next((j for j in range(9) if t<T[j+1]),8);q=t-T[i];im=back.copy();d=ImageDraw.Draw(im)
+           if i==8:
+            o=d;r=35+155*e(q/.85);ell(o,360,590,r,r,None,L,3);ell(o,360,590,r*.85,r*.85,None,M,1);tx(o,360,335,'STAY CURIOUS',30);x=360-font(43).getlength('meanwhilemash')/(2*S);tx(o,x,550,'meanwhile',43,F,'lm');tx(o,x+font(43).getlength('meanwhile')/S,550,'mash',43,L,'lm');b=e((q-.8)/.5);press=math.exp(-((q-2.3)/.12)**2);w=max(1,390*b*(1-.06*press));box(o,360-w/2,660,w,76,L,38)
+            if b>.55:tx(o,360,698,'SUBSCRIBE',32,K,lim=max(20,w-24))
+            if q>1.35:tx(o,360,815,'GET UPDATED',23)
+            if 2.3<=q<=2.9:
+             g=e((q-2.3)/.6);ell(o,360,698,200+40*g,42+36*g,None,L,1)
+            tx(o,360,1010,'CURIOSITY WITHOUT LIMITS',18,G)
+            return Image.blend(frame(37.99*D/42),im,e(q/.75)) if q<.75 else im
+           poly(d,[(40,850),(680,850),(720,1110),(0,1110)],'#1C2B34')
+           for j in range(-4,5):line(d,[(360+j*45,850),(360+j*130,1110)],'#283A44',1)
+           if i in (0,1,2,6,7):
+            curl=(1-math.cos(2*math.pi*q/1.8))/2 if i<2 else 0;g=e((q-.2)/3) if i==1 else (.8 if i in (2,6,7) else 0);body(d,curl,g,i<2)
+            tx(d,175,990,'RIGHT / TRAINED',18,L);tx(d,545,990,'LEFT / UNTRAINED',18)
+            if i==0:tx(d,135,320,'RIGHT ONLY',19,L)
+            if i==1:tx(d,135,320,'MONTH '+str(min(6,1+int(q*1.3))),21,L)
+            if i in (2,7):signal(d,[(360,324),(360,405),(474,443),(506,579),(506,694)],(q%1.6)/1.6,C);tx(d,535,765,'TRANSFER',20,C)
+            if i==6:line(d,[(360,399),(360,958)],M,2);tx(d,135,320,'SIZE DIFFERS',18,L)
+           elif i in (3,4):
+            brain(d);tx(d,360,310,'BRAIN',22,C)
+            for k in [-1,1]:
+             path=[(360-k*64,530),(360,623),(360+k*110,685),(360+k*180,790)];signal(d,path,((q+.45*(k+1))%1.8)/1.8,C if k==1 else L);limb(d,(360+k*180,804),(360+k*180,930),34,19,L if k==-1 else '#A1B1B8',True);tx(d,360+k*180,977,'TRAINED' if k==-1 else 'UNTRAINED',20,L if k==-1 else F)
+           else:
+            for j,(h,c) in enumerate([('MUSCLE SIZE',L),('STRENGTH',C)]):
+             y=410+j*305;tx(d,360,y-95,h,28,c)
+             for k in [-1,1]:
+              x=360+k*155;g=e((q-.2-j*.65)/1.35)
+              if j==0:limb(d,(x,y-34),(x,y+80),33+(20*g if k==-1 else 0),23,L if k==-1 else '#A1B1B8',True)
+              else:
+               weight(d,x,y+5,.9);line(d,[(x,y+106),(x,y+106-65*g)],c,5);tx(d,x,y+126,'MAY INCREASE' if k==1 else 'CAN INCREASE',16,c)
+              tx(d,x,y+156,'TRAINED' if k==-1 else 'UNTRAINED',18,L if k==-1 else F)
+           box(d,20,20,680,235,K,18);tx(d,42,55,'meanwhile',24,F,'lm');tx(d,42+font(24).getlength('meanwhile')/S,55,'mash',24,L,'lm');tx(d,678,55,'FITNESS / F07',15,G,'rm');tx(d,360,155,HEAD[i][0],42);tx(d,360,220,HEAD[i][1],34,L);box(d,24,1030,672,88,K,14);tx(d,360,1059,FOOT[i],18,'#A6B4BE');line(d,[(45,1100),(675,1100)],M,3);line(d,[(45,1100),(45+630*t/42,1100)],L,3);return im
+          # Original action cues, scheduled in reference time and frame-quantized.
+          def audio():
+           scale=D/42;rng=np.random.default_rng(707);buf=np.zeros((round(D*SR),2),np.float32)
+           def cue(at,k='pop',span=.18,amp=.12,pan=0):
+            start=round(math.ceil(at*scale*FPS-1e-8)*SR/FPS);n=max(2,round(span*scale*SR));t=np.arange(n)/SR;u=np.arange(n)/n;noise=rng.normal(0,1,n);freq=np.fft.rfftfreq(n,1/SR);sp=np.fft.rfft(noise);sp*=np.minimum(1,(freq/400)**2)*np.minimum(1,(4500/np.maximum(freq,1))**3);noise=np.fft.irfft(sp,n);noise/=max(1e-9,np.max(abs(noise)))
+            if k=='air':v=noise*np.sin(np.pi*u)**2
+            elif k=='pulse':v=(.73*np.sin(2*np.pi*(420*t+400*t*t))+.27*noise)*np.sin(np.pi*u)**2
+            elif k=='metal':v=(.5*np.sin(2*np.pi*640*t)+.3*np.sin(2*np.pi*1140*t)+.2*noise)*np.exp(-u*7)
+            elif k=='land':v=(.8*np.sin(2*np.pi*(75*t-15*t*t))+.2*noise)*np.exp(-u*7)
+            else:v=(.7*np.sin(2*np.pi*(780*t+700*t*t))+.3*noise)*np.exp(-u*7)
+            fade=min(96,n//2);v[:fade]*=np.linspace(0,1,fade);v[-fade:]*=np.linspace(1,0,fade);n=min(n,len(buf)-start)
+            if n>0:buf[start:start+n]+=v[:n,None]*amp*np.sqrt([1-pan,1+pan])
+           for at in T[:-2]:cue(at,'land',.27,.15)
+           for start,end in [(0,4),(4,9)]:
+            for q in np.arange(0,end-start,1.8):
+             cue(start+q,'air',min(.85,end-start-q),.10,-.2)
+             if start+q+.9<end:cue(start+q+.9,'metal',.18,.12,-.2)
+           for j in range(1,6):cue(4+j/1.3,'pop',.08,.09)
+           for start,end,period in [(9,14,1.6),(14,18,1.8),(18,24,1.8),(34,38,1.6)]:
+            for at in np.arange(start,end,period):cue(at,'pulse',min(period*.75,end-at),.10,-.2 if start in (14,18) else .2)
+            if start in (14,18):
+             for at in np.arange(start+.9,end,period):cue(at,'pulse',min(period*.65,end-at),.085,.2)
+           for at in [24.2,25.55,24.85,26.2,29.2,32.2]:cue(at,'pop',.2,.10)
+           for at,k,span,amp in [(38,'air',.75,.10),(38.8,'pulse',.5,.09),(39.3,'pop',.17,.12),(39.35,'pop',.15,.08),(40.3,'metal',.17,.12),(40.45,'pulse',.3,.07)]:cue(at,k,span,amp)
+           peak=float(np.max(abs(buf)));buf*=min(1,10**(-8/20)/max(peak,1e-9))
+           with wave.open('F07_SFX.wav','wb') as w:w.setparams((2,2,SR,0,'NONE','not compressed'));w.writeframes(np.int16(buf*32767).tobytes())
+           print('SFX peak dBFS',20*math.log10(max(float(np.max(abs(buf))),1e-9)))
+          if __name__=='__main__':
+           audio();cmd=['ffmpeg','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r','30','-i','-','-i','F07_SFX.wav','-c:v','libx264','-preset','veryfast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-shortest','-movflags','+faststart','F07.mp4']
+           with subprocess.Popen(cmd,stdin=subprocess.PIPE) as proc:
+            for k in range(round(D*FPS)):proc.stdin.write(frame(k/FPS).tobytes())
+            proc.stdin.close()
+            if proc.wait():raise RuntimeError('Render failed')
+          MM_RENDERER
+          if [ "$QUALITY" = preview ]; then WIDTH=432; else WIDTH=1080; fi
+          python render.py --width "$WIDTH" --duration "$DURATION"
+      - name: Upload video and sound
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanwhilemash-f07-one-side-training
+          path: |
+            F07.mp4
+            F07_SFX.wav
+          retention-days: 7

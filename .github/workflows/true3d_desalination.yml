@@ -1,0 +1,286 @@
+name: MeanwhileMash - True 3D Desalination
+on:
+  workflow_dispatch:
+    inputs:
+      quality:
+        type: choice
+        options: [preview, full, stills]
+        default: preview
+      duration_sec:
+        description: Narration duration in seconds
+        default: '41.404'
+        type: string
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      DURATION: ${{ inputs.duration_sec }}
+      QUALITY: ${{ inputs.quality }}
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install fast dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install imageio imageio-ffmpeg numpy pillow vtk==9.6.2
+      - name: Write engine and episode
+        shell: bash
+        run: |
+          cat > engine.py <<'PYCODE'
+          import math, os, subprocess, wave
+          from functools import lru_cache
+          import numpy as np
+          import vtk
+          from vtk.util.numpy_support import vtk_to_numpy
+          from PIL import Image, ImageDraw, ImageFont
+          WHITE=(.96,.96,.96); LIME=(.776,1,0); STEEL=(.38,.46,.49); DARK=(.10,.15,.17); RED=(1,.36,.32); BLUE=(.25,.64,.80); CYAN=(.4,.82,.96)
+          def ease(t):
+            t=np.clip(t,0,1);return float(t*t*(3-2*t))
+          def mix(a,b,t): return a+(b-a)*t
+          @lru_cache(None)
+          def font(s): return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',s)
+          class Studio:
+            def __init__(self,W,H):
+              self.W,self.H=W,H
+              self.r=vtk.vtkRenderer(); self.r.SetBackground(.03,.07,.09); self.r.SetBackground2(.08,.17,.19); self.r.GradientBackgroundOn()
+              self.win=vtk.vtkRenderWindow(); self.win.SetOffScreenRendering(1); self.win.SetMultiSamples(0); self.win.AddRenderer(self.r); self.win.SetSize(W,H)
+              self.r.AutomaticLightCreationOff()
+              for pos,i in [((-4,-4,7),1),((4,-1,4),.55),((1,4,5),.65)]:
+                l=vtk.vtkLight();l.SetLightTypeToSceneLight();l.SetPosition(*pos);l.SetFocalPoint(0,0,1);l.SetIntensity(i);self.r.AddLight(l)
+              self.cam=self.r.GetActiveCamera(); self.cam.SetViewUp(0,0,1); self.cam.SetViewAngle(29)
+              self.cap=vtk.vtkWindowToImageFilter(); self.cap.SetInput(self.win); self.cap.ReadFrontBufferOff()
+              self.sources={}
+              for kind in ['box','ell','rod','cone']:
+                s={'box':vtk.vtkCubeSource,'ell':vtk.vtkSphereSource,'rod':vtk.vtkCylinderSource,'cone':vtk.vtkConeSource}[kind]()
+                if kind=='ell': s.SetRadius(1); s.SetThetaResolution(24); s.SetPhiResolution(18)
+                if kind=='rod': s.SetRadius(1); s.SetHeight(1); s.SetResolution(24)
+                if kind=='cone': s.SetRadius(1); s.SetHeight(1); s.SetResolution(24)
+                m=vtk.vtkPolyDataMapper(); m.SetInputConnection(s.GetOutputPort()); self.sources[kind]=m
+            def actor(self,kind,c,pos=(0,0,0),scale=(1,1,1)):
+              a=vtk.vtkActor(); a.SetMapper(self.sources[kind]); a.SetPosition(*pos); a.SetScale(*scale)
+              p=a.GetProperty(); p.SetColor(*c); p.SetAmbient(.25); p.SetDiffuse(.75); p.SetSpecular(.13); p.SetSpecularPower(24)
+              self.r.AddActor(a); return a
+            def box(self,pos,scale,c): return self.actor('box',c,pos,scale)
+            def ell(self,pos,scale,c): return self.actor('ell',c,pos,scale)
+            def rod(self,a,b,rad,c,opacity=1):
+              ob=self.actor('rod',c); self.segment(ob,a,b,rad); ob.GetProperty().SetOpacity(opacity); return ob
+            def cone(self,pos,scale,c): return self.actor('cone',c,pos,scale)
+            def segment(self,ob,a,b,rad,ell=False):
+              a,b=np.asarray(a),np.asarray(b); d=b-a; L=max(np.linalg.norm(d),1e-6); u=d/L
+              axis=np.cross([0,1,0],u); ang=math.degrees(math.acos(np.clip(u[1],-1,1)))
+              ob.SetPosition(*((a+b)/2)); ob.SetScale(rad,L*(.56 if ell else 1),rad); ob.SetOrientation(0,0,0)
+              if np.linalg.norm(axis)>1e-7: ob.RotateWXYZ(ang,*axis)
+              elif u[1]<0: ob.RotateX(180)
+            def frame(self):
+              self.win.Render(); self.cap.Modified(); self.cap.Update(); arr=vtk_to_numpy(self.cap.GetOutput().GetPointData().GetScalars()).reshape(self.H,self.W,3)
+              return Image.fromarray(np.flipud(arr).copy())
+            def close(self): self.win.Finalize()
+          class Audio:
+            def __init__(self,duration): self.sr=48000; self.a=np.zeros((round(duration*self.sr),2),np.float32); self.rng=np.random.default_rng(77)
+            def event(self,t,kind,pan=0,amp=1):
+              config={'hook':(.42,110,38,.17),'water':(.25,540,160,.08),'pump':(.22,120,340,.10),'scan':(.30,290,1050,.065),'pulse':(.13,720,480,.055),'filter':(.15,760,350,.08),'flow':(.18,330,240,.07),'split':(.20,480,780,.085),'rise':(.32,260,820,.075),'click':(.10,680,520,.06),'cta':(.22,420,900,.09)}
+              d,f0,f1,g=config[kind]; i=max(0,round(t*self.sr)); n=min(len(self.a)-i,round(d*self.sr))
+              if n<=0:return
+              q=np.arange(n)/self.sr; phase=2*np.pi*(f0*q+(f1-f0)*q*q/(2*d)); env=np.sin(np.pi*np.clip(q/d,0,1))**1.5
+              noise=self.rng.normal(0,1,n)*(.08 if kind in ['pump','flow','water'] else .02)
+              w=(np.sin(phase)+.18*np.sin(phase*2)+noise)*env*g*amp
+              self.a[i:i+n,0]+=w*math.sqrt((1-pan)/2); self.a[i:i+n,1]+=w*math.sqrt((1+pan)/2)
+            def save(self,path):
+              peak=max(1e-8,float(np.max(np.abs(self.a)))); a=self.a*min(1,.45/peak)
+              with wave.open(path,'wb') as f:
+                f.setnchannels(2); f.setsampwidth(2); f.setframerate(self.sr); f.writeframes((a*32767).astype('<i2').tobytes())
+          def encode(frames,W,H,fps,path):
+            import imageio.v2 as imageio
+            writer=imageio.get_writer(path,fps=fps,codec='libx264',quality=8)
+            for im in frames: writer.append_data(np.array(im.convert('RGB')))
+            writer.close()
+          def mux(video,audio,out):
+            subprocess.run(['ffmpeg','-v','error','-y','-i',video,'-i',audio,'-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',out],check=True)
+          def overlay(im,headline,footer,progress,cta=0):
+            d=ImageDraw.Draw(im); W,H=im.size; u=W/450
+            def F(k): return font(max(10,round(k*u)))
+            def label(txt,y,size,color,anchor='mm',x=None):
+              f=F(size)
+              while d.textlength(txt,font=f)>W*.88 and f.size>10: f=font(f.size-1)
+              d.text((W/2 if x is None else x,y*H),txt,font=f,fill=color,anchor=anchor,stroke_width=max(1,round(u)),stroke_fill='#102226')
+            f=F(17); x=22*u; y=.033*H
+            d.text((x,y),'meanwhile',font=f,fill='#F5F5F5')
+            d.text((x+d.textlength('meanwhile',font=f),y),'mash',font=f,fill='#C6FF00')
+            label(headline,.111,30,'#F5F5F5'); label(footer,.866,22,'#C6FF00')
+            d.rounded_rectangle((W*.10,H*.925,W*.90,H*.931),radius=max(1,round(2*u)),fill='#34474D')
+            d.rounded_rectangle((W*.10,H*.925,W*(.10+.8*max(.005,progress)),H*.931),radius=max(1,round(2*u)),fill='#C6FF00')
+            if cta>0:
+              x0=W*.18; x1=W*.82; y0=H*(.76+.045*(1-ease(cta))); y1=y0+H*.052
+              d.rounded_rectangle((x0,y0,x1,y1),radius=round(12*u),fill='#C6FF00')
+              d.text((W/2,(y0+y1)/2),'SUBSCRIBE  •  meanwhilemash',font=F(13),fill='#101820',anchor='mm')
+            return im
+          PYCODE
+          cat > episode.py <<'PYCODE'
+          import os, math, argparse, numpy as np
+          from engine import Studio, Audio, encode, mux, overlay, ease, mix, WHITE, LIME, STEEL, DARK, BLUE, CYAN, RED
+          P=argparse.ArgumentParser(); P.add_argument('--duration',type=float,default=41.404); P.add_argument('--fps',type=int,default=24); P.add_argument('--width',type=int,default=1080); P.add_argument('--height',type=int,default=1920); P.add_argument('--out',default='out'); P.add_argument('--still',action='store_true'); a=P.parse_args()
+          os.makedirs(a.out,exist_ok=True)
+          D=a.duration; S=Studio(a.width,a.height)
+          box,ell,rod,cone=S.box,S.ell,S.rod,S.cone
+          SEA=(.10,.38,.62); SAND=(.73,.66,.45); PIPE=(.48,.60,.63); GLASS=(.55,.80,.88); SLUDGE=(.63,.56,.45); BUILD=(.83,.86,.88); GREEN=(.22,.66,.24)
+
+          # Environment
+          box((0,0,-.26),(28,18,.25),(.05,.12,.14))
+          box((-8.3,0,-.08),(6.8,18,.10),SEA)
+          box((-8.3,-7.2,-.02),(6.8,3.6,.04),(SAND))
+          for x in np.linspace(-13,13,28): box((x,0,-.17),(.015,18,.01),(.10,.22,.24))
+          for y in np.linspace(-9,9,20): box((0,y,-.17),(28,.015,.01),(.10,.22,.24))
+
+          # Ocean and intake
+          intake_pipe=[rod((-5.8,-2.5,.05),(-3.2,-2.5,.05),.16,PIPE), rod((-3.2,-2.5,.05),(-3.2,-.6,.05),.16,PIPE), rod((-3.2,-.6,.05),(-1.9,-.6,.05),.16,PIPE)]
+          pump_body=box((-1.2,-.6,.34),(.84,.84,.68),STEEL); pump_motor=box((-1.2,-.6,.90),(.46,.46,.48),DARK)
+          filters=[]
+          for i,x in enumerate([.3,1.35]):
+            filters.append(box((x,-.65,.56),(.68,.68,1.10),STEEL))
+            for z in np.linspace(.08,1.00,7): box((x,-.65,z),(.58,.045,.035),CYAN)
+          # RO membrane rack
+          mem=[]
+          for row,y in enumerate([.72,0.0,-.72]):
+            for col,x in enumerate([3.1,4.2,5.3]):
+              c=rod((x,y,.64),(x,y,1.86),.18,STEEL)
+              mem.append(c)
+          # Brine and clean water
+          brine_pipe=[rod((5.9,1.0,1.26),(7.2,1.0,1.26),.12,PIPE), rod((7.2,1.0,1.26),(7.2,2.6,1.26),.12,PIPE)]
+          pure_pipe=[rod((5.9,-1.0,1.26),(7.3,-1.0,1.26),.12,PIPE), rod((7.3,-1.0,1.26),(7.3,-2.0,1.26),.12,PIPE), rod((7.3,-2.0,1.26),(8.7,-2.0,1.26),.12,PIPE)]
+          mineral=box((8.9,-2.0,1.0),(.82,.82,.80),STEEL); disinfect=box((10.2,-2.0,1.0),(.82,.82,.80),CYAN)
+          city_pipe=[rod((10.7,-2.0,1.26),(12.4,-2.0,1.26),.12,PIPE), rod((12.4,-2.0,1.26),(12.4,.1,1.26),.12,PIPE)]
+          # Houses
+          houses=[]
+          for i,x in enumerate([11.6,12.7,13.8]):
+            houses.append(box((x,.6,.8),(.82,.96,1.20),BUILD)); houses.append(box((x,.6,1.52),(.96,1.10,.14),DARK))
+          faucet=rod((13.8,.4,1.4),(14.3,.4,1.4),.05,STEEL); sink=box((14.2,.4,1.05),(.9,.55,.12),STEEL)
+          glass=box((14.7,.2,.94),(.36,.36,.70),GLASS); glass.GetProperty().SetOpacity(.35)
+          water_in_glass=box((14.7,.2,.66),(.28,.28,.16),BLUE)
+          # Particle systems
+          ocean_drops=[ell((0,0,0),(.06,.06,.06),BLUE) for _ in range(24)]
+          feed_beads=[ell((0,0,0),(.06,.06,.06),CYAN) for _ in range(18)]
+          salt_beads=[ell((0,0,0),(.055,.055,.055),RED) for _ in range(20)]
+          pure_beads=[ell((0,0,0),(.05,.05,.05),LIME) for _ in range(20)]
+          brine_beads=[ell((0,0,0),(.05,.05,.05),RED) for _ in range(16)]
+          mineral_beads=[ell((0,0,0),(.04,.04,.04),LIME) for _ in range(10)]
+          city_beads=[ell((0,0,0),(.05,.05,.05),LIME) for _ in range(18)]
+
+          # timing based on actual audio plan
+          starts=[0.0,4.0,10.52,14.93,19.84,22.69,29.02,33.45,37.27,41.404]
+          labels=[
+            ('OCEAN WATER → DRINKING WATER','ENGINEERING MAKES IT POSSIBLE'),
+            ('INTAKE + FILTRATION','REMOVE SAND AND DEBRIS'),
+            ('HIGH-PRESSURE PUMPS','FORCE WATER INTO MEMBRANES'),
+            ('MOLECULAR SEPARATION','WATER PASSES • SALT STAYS'),
+            ('REVERSE OSMOSIS','THE CORE DESALINATION STEP'),
+            ('FINAL TREATMENT','BRINE OUT • FRESH WATER CONDITIONED'),
+            ('DISTRIBUTION','PIPES DELIVER WATER TO HOMES'),
+            ('FROM OCEAN TO GLASS','DESALINATION IN ACTION'),
+            ('SUBSCRIBE','MEANWHILEMASH')
+          ]
+          views=[
+            (np.array([-5.6,-1.8,.8]),9.8,-18,3.7),
+            (np.array([.6,-.6,.8]),7.8,-12,3.4),
+            (np.array([3.0,-.2,1.0]),7.0,-6,3.2),
+            (np.array([4.3,.0,1.28]),5.8,0,2.8),
+            (np.array([4.8,0,1.28]),7.4,18,3.3),
+            (np.array([8.8,-1.85,1.0]),7.6,10,3.2),
+            (np.array([12.4,-.4,1.0]),8.0,6,3.1),
+            (np.array([6.2,-.8,.9]),21,-58,11),
+            (np.array([11.8,.1,1.2]),9.0,-22,3.6)
+          ]
+
+          def seg_point(points,f):
+            pts=np.array(points,float); lens=np.linalg.norm(np.diff(pts,axis=0),axis=1); cum=np.r_[0,np.cumsum(lens)]; total=cum[-1]
+            if total<=1e-9: return pts[0]
+            v=(f%1)*total; i=min(len(lens)-1,int(np.searchsorted(cum[1:],v,side='right'))); tt=(v-cum[i])/lens[i]
+            return mix(pts[i],pts[i+1],tt)
+          feed_path=[(-5.8,-2.5,.05),(-3.2,-2.5,.05),(-3.2,-.6,.05),(-1.2,-.6,.05),(.3,-.65,.5),(1.35,-.65,.5),(3.1,0,.8)]
+          brine_path=[(5.9,1.0,1.26),(7.2,1.0,1.26),(7.2,2.6,1.26)]
+          pure_path=[(5.9,-1.0,1.26),(7.3,-1.0,1.26),(7.3,-2.0,1.26),(8.9,-2.0,1.0),(10.2,-2.0,1.0),(12.4,-2.0,1.26),(12.4,.1,1.26),(13.8,.4,1.4),(14.7,.2,.66)]
+
+          def render(t):
+            idx=min(len(labels)-1,int(np.searchsorted(starts[1:],t,side='right'))); s,e=starts[idx],starts[idx+1]; p=np.clip((t-s)/(e-s),0,1); q=ease(p)
+            # ocean waves
+            for i,o in enumerate(ocean_drops):
+              th=t*1.4+i*.33; o.SetPosition(-8.2+((i%6)*.9), -2.7+((i//6)*1.0)+0.08*math.sin(th), .20+0.08*math.sin(th*1.5)); o.SetScale(.22,.12,.05)
+              o.SetVisibility(idx==0)
+            # flowing particles
+            for i,o in enumerate(feed_beads): o.SetPosition(*seg_point(feed_path,t*.20+i/len(feed_beads))); o.SetVisibility(idx in [1,2,7])
+            # membrane split effect
+            for i,o in enumerate(salt_beads):
+              o.SetPosition(4.1+((i%5)*.28), .82-((i//5)*.42), 1.12+0.08*math.sin(t*3+i)); o.SetVisibility(idx in [3,4])
+            for i,o in enumerate(pure_beads):
+              if idx in [3,4,5,6,7,8]: o.SetPosition(*seg_point(pure_path,t*.17+i/len(pure_beads)))
+              o.SetVisibility(idx in [3,4,5,6,7,8])
+            for i,o in enumerate(brine_beads):
+              o.SetPosition(*seg_point(brine_path,t*.19+i/len(brine_beads))); o.SetVisibility(idx in [5,7])
+            for i,o in enumerate(city_beads):
+              o.SetPosition(*seg_point(pure_path,(t*.16+i/len(city_beads))+0.25)); o.SetVisibility(idx in [6,7,8])
+            for i,o in enumerate(mineral_beads):
+              o.SetPosition(8.9+0.18*math.sin(t*3+i),-2.0+0.18*math.cos(t*2+i),1.0+0.20*((i%5)/5)); o.SetVisibility(idx==5)
+            # pump pulse
+            pump_motor.SetScale(.46,.46,.48+0.03*math.sin(t*8))
+            # glass fill
+            fill=np.clip((t-31.5)/4.5,0,1); water_in_glass.SetScale(.28,.28,.12+.42*fill); water_in_glass.SetPosition(14.7,.2,.49+.21*fill)
+            # camera
+            target,dist,az,z=views[idx]
+            if idx and p<.18:
+              old=views[idx-1]; f=ease(p/.18); target=mix(old[0],target,f); dist=mix(old[1],dist,f); az=mix(old[2],az,f); z=mix(old[3],z,f)
+            th=math.radians(az+10*q); S.cam.SetPosition(target[0]+dist*math.sin(th),target[1]-dist*math.cos(th),z); S.cam.SetFocalPoint(*target); S.r.ResetCameraClippingRange()
+            im=S.frame(); cta=min(1,p*4) if idx==8 and p>.05 else 0
+            return overlay(im,labels[idx][0],labels[idx][1],min(1,t/D),cta)
+
+          if a.still:
+            for i in range(len(labels)): render((starts[i]+starts[i+1])/2).save(f'{a.out}/scene_{i+1}.png')
+          else:
+            def frames():
+              total=round(D*a.fps)
+              for f in range(total):
+                if f%(a.fps*4)==0: print(f'Frame {f}/{total}',flush=True)
+                yield render(f/a.fps)
+            encode(frames(),a.width,a.height,a.fps,f'{a.out}/visual.mp4')
+            A=Audio(D)
+            # action-timed SFX around audio structure
+            A.event(0.0,'hook'); A.event(0.9,'water',amp=.8); A.event(2.0,'rise',amp=.55)
+            for tm in [4.2,5.3,6.5,7.4,8.6,9.7]: A.event(tm,'flow',pan=-.3,amp=.45)
+            for tm in [4.6,6.8,8.9]: A.event(tm,'filter',pan=.2,amp=.55)
+            for tm in [10.7,11.8,12.9,14.0]: A.event(tm,'pump',amp=.65)
+            for tm in [15.1,16.0,16.9,17.8,18.7]: A.event(tm,'pulse',amp=.45)
+            A.event(19.95,'scan',amp=.6); A.event(20.7,'split',amp=.6)
+            for tm in [22.9,24.1,25.2,26.4,27.8,28.7]: A.event(tm,'flow',amp=.42)
+            for tm in [23.7,26.9]: A.event(tm,'click',amp=.5)
+            for tm in [29.4,30.5,31.8,32.6]: A.event(tm,'flow',pan=.25,amp=.50)
+            A.event(33.7,'rise',amp=.55); A.event(35.1,'water',amp=.7)
+            A.event(37.45,'cta',amp=.75); A.event(39.2,'click',amp=.55)
+            A.save(f'{a.out}/sfx.wav')
+            mux(f'{a.out}/visual.mp4',f'{a.out}/sfx.wav',f'{a.out}/MeanwhileMash_Desalination.mp4')
+          S.close()
+          PYCODE
+      - name: Render true 3D episode
+        shell: bash
+        run: |
+          case "$QUALITY" in
+            preview) set -- --width 360 --height 640 --fps 12 ;;
+            full) set -- --width 1080 --height 1920 --fps 24 ;;
+            stills) set -- --width 450 --height 800 --still ;;
+            *) exit 1 ;;
+          esac
+          python episode.py --duration "$DURATION" "$@"
+      - name: Upload output
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeanwhileMash-Desalination-${{ inputs.quality }}
+          path: |
+            out/MeanwhileMash_Desalination.mp4
+            out/scene_*.png
+          if-no-files-found: error
+          retention-days: 7

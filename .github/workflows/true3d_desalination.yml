@@ -1,4 +1,4 @@
-name: MeanwhileMash - Desalination V3
+name: MeanwhileMash - Desalination V3 FFmpeg Fix
 on:
   workflow_dispatch:
     inputs:
@@ -45,13 +45,16 @@ jobs:
             sudo apt-get update -qq
             sudo apt-get install -y --no-install-recommends "${missing[@]}"
           fi
-          python -m pip install --disable-pip-version-check vtk==9.6.2 numpy pillow
+          python -m pip install --disable-pip-version-check vtk==9.6.2 numpy pillow imageio-ffmpeg==0.6.0
+          python -c "import imageio_ffmpeg, subprocess; subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-version'], check=True)"
       - name: Render approved geometry
         shell: bash
         run: |
           cat > episode.py <<'PYCODE'
           import os, math, random, argparse, subprocess, wave, bisect
           import numpy as np
+          import imageio_ffmpeg
+          FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
           import vtk
           from vtk.util.numpy_support import vtk_to_numpy
           from PIL import Image, ImageDraw, ImageFont
@@ -300,14 +303,14 @@ jobs:
             for j,c in enumerate(CUES):
              get(c[0]+.45).save(f'out/scene_{j+1:02}.png'); print('Scene',j+1,flush=True)
            else:
-            enc=subprocess.Popen(['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(fps),'-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p','out/visual.mp4'],stdin=subprocess.PIPE)
+            enc=subprocess.Popen([FFMPEG,'-v','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(fps),'-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','18','-pix_fmt','yuv420p','out/visual.mp4'],stdin=subprocess.PIPE)
             try:
              for f in range(total):
               if f%(fps*3)==0: print(f'Frame {f}/{total}',flush=True)
               enc.stdin.write(get(f/fps).tobytes())
             finally: enc.stdin.close(); rc=enc.wait()
             if rc: raise RuntimeError('ffmpeg failure')
-            sound('out/sfx.wav',total/fps); subprocess.run(['ffmpeg','-v','error','-y','-i','out/visual.mp4','-i','out/sfx.wav','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart','out/MeanwhileMash_Desalination_V3.mp4'],check=True)
+            sound('out/sfx.wav',total/fps); subprocess.run([FFMPEG,'-v','error','-y','-i','out/visual.mp4','-i','out/sfx.wav','-c:v','copy','-c:a','aac','-b:a','192k','-movflags','+faststart','out/MeanwhileMash_Desalination_V3.mp4'],check=True)
            if s: s.win.Finalize()
           if __name__=='__main__': main()
           PYCODE

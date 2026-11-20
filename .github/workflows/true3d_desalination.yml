@@ -17,6 +17,8 @@ jobs:
     permissions:
       contents: read
     env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      LP_NUM_THREADS: '2'
       DURATION: ${{ inputs.duration_sec }}
       QUALITY: ${{ inputs.quality }}
       PIP_DISABLE_PIP_VERSION_CHECK: '1'
@@ -25,12 +27,34 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-      - name: Install fast dependencies
+      - name: Cache renderer Python downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-${{ runner.arch }}-true3d-py311-vtk962-numpy-pillow-ffmpeg-imageio-v2
+      - name: Install renderer dependencies (fast path)
         shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install imageio imageio-ffmpeg numpy pillow vtk==9.6.2
+          set -euo pipefail
+          missing=()
+          for pkg in libgl1 libegl1 libgl1-mesa-dri; do
+            if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed'; then
+              missing+=("$pkg")
+            fi
+          done
+          if [[ ! -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ]]; then
+            missing+=(fonts-dejavu-core)
+          fi
+          if (( ${#missing[@]} )); then
+            printf 'Missing system packages: %s\n' "${missing[*]}"
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          python -m pip install --disable-pip-version-check vtk==9.6.2 numpy pillow imageio imageio-ffmpeg
+          mkdir -p "$RUNNER_TEMP/mm-bin"
+          ln -sf "$(python -c 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())')" "$RUNNER_TEMP/mm-bin/ffmpeg"
+          echo "$RUNNER_TEMP/mm-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/mm-bin/ffmpeg" -version | head -n 1
       - name: Write engine and episode
         shell: bash
         run: |
@@ -99,7 +123,7 @@ jobs:
                 f.setnchannels(2); f.setsampwidth(2); f.setframerate(self.sr); f.writeframes((a*32767).astype('<i2').tobytes())
           def encode(frames,W,H,fps,path):
             import imageio.v2 as imageio
-            writer=imageio.get_writer(path,fps=fps,codec='libx264',quality=8)
+            writer=imageio.get_writer(path,fps=fps,codec='libx264',quality=8,macro_block_size=2)
             for im in frames: writer.append_data(np.array(im.convert('RGB')))
             writer.close()
           def mux(video,audio,out):
@@ -129,6 +153,7 @@ jobs:
           P=argparse.ArgumentParser(); P.add_argument('--duration',type=float,default=41.404); P.add_argument('--fps',type=int,default=24); P.add_argument('--width',type=int,default=1080); P.add_argument('--height',type=int,default=1920); P.add_argument('--out',default='out'); P.add_argument('--still',action='store_true'); a=P.parse_args()
           os.makedirs(a.out,exist_ok=True)
           D=a.duration; S=Studio(a.width,a.height)
+          if abs(D-41.404)>.001: raise ValueError("Use duration_sec=41.404 for the supplied narration.")
           box,ell,rod,cone=S.box,S.ell,S.rod,S.cone
           SEA=(.10,.38,.62); SAND=(.73,.66,.45); PIPE=(.48,.60,.63); GLASS=(.55,.80,.88); SLUDGE=(.63,.56,.45); BUILD=(.83,.86,.88); GREEN=(.22,.66,.24)
 
@@ -274,7 +299,11 @@ jobs:
             stills) set -- --width 450 --height 800 --still ;;
             *) exit 1 ;;
           esac
-          python episode.py --duration "$DURATION" "$@"
+          if command -v xvfb-run >/dev/null && command -v xauth >/dev/null; then
+            xvfb-run -a -s '-screen 0 1280x2048x24' python episode.py --duration "$DURATION" "$@"
+          else
+            VTK_DEFAULT_OPENGL_WINDOW=vtkEGLRenderWindow python episode.py --duration "$DURATION" "$@"
+          fi
       - name: Upload output
         uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,406 @@
+name: MeanwhileMash - One Side Body Technical
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_sec:
+        description: "Video duration in seconds"
+        required: false
+        default: "34"
+      fps:
+        description: "Frames per second"
+        required: false
+        default: "24"
+
+jobs:
+  render-video:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          pip install pillow numpy scipy imageio imageio-ffmpeg
+
+      - name: Render episode
+        run: |
+          cat > render.py <<'PY'
+          import os, math, subprocess
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont, ImageFilter
+          import imageio.v2 as imageio
+          from scipy.io.wavfile import write as wavwrite
+
+          W, H = 1080, 1920
+          BG = (14, 20, 26)
+          PANEL = (21, 31, 41)
+          PANEL2 = (28, 40, 52)
+          GRID = (28, 43, 56)
+          WHITE = (245,245,245)
+          SLATE = (110,125,145)
+          LIME = (198,255,0)
+          LIME2 = (140,220,20)
+          RED = (255,103,103)
+          CYAN = (95,230,255)
+          YELLOW = (255, 211, 79)
+          fps = int(os.environ.get('FPS', '${{ github.event.inputs.fps }}' or '24'))
+          duration = float(os.environ.get('DURATION', '${{ github.event.inputs.duration_sec }}' or '34'))
+          frames = int(duration * fps)
+          OUT='out'; os.makedirs(OUT, exist_ok=True)
+
+          FONT_B='/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
+          FONT_R='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+          def F(sz, bold=True):
+              return ImageFont.truetype(FONT_B if bold else FONT_R, sz)
+          def ease(t):
+              t=max(0,min(1,t)); return 3*t*t-2*t*t*t
+          def clamp(x,a,b): return max(a,min(b,x))
+          def mix(a,b,t): return a+(b-a)*t
+
+          scenes = [
+            (0.0, 4.5, 'hook'),
+            (4.5, 10.0, 'arm'),
+            (10.0, 15.5, 'leg'),
+            (15.5, 21.0, 'posture'),
+            (21.0, 27.0, 'joints'),
+            (27.0, 34.0, 'balance')
+          ]
+          def get_scene(t):
+              for s,e,n in scenes:
+                  if s<=t<e: return s,e,n
+              return scenes[-1]
+
+          def glow_circle(base, center, r, color, blur=24, alpha=120):
+              overlay = Image.new('RGBA', base.size, (0,0,0,0))
+              d=ImageDraw.Draw(overlay)
+              x,y=center
+              d.ellipse((x-r,y-r,x+r,y+r), fill=(*color, alpha))
+              overlay = overlay.filter(ImageFilter.GaussianBlur(blur))
+              base.alpha_composite(overlay)
+
+          def draw_grid(draw, ox=0, oy=0):
+              # perspective-ish floor grid
+              horizon = 720
+              for i in range(-12, 13):
+                  x = 540 + i*100 + ox*0.3
+                  draw.line((x, horizon, 540+i*28, H), fill=GRID, width=2)
+              for j in range(0, 13):
+                  y = horizon + j*75 + oy*0.2
+                  pad = j*32
+                  draw.line((pad, y, W-pad, y), fill=GRID, width=2)
+              for y in range(0, horizon, 88):
+                  draw.line((0, y+oy%88, W, y+oy%88), fill=(22,34,44), width=1)
+              for x in range(0, W, 88):
+                  draw.line((x+ox%88, 0, x+ox%88, horizon), fill=(22,34,44), width=1)
+
+          def text(draw, pos, s, size, fill=WHITE, anchor='mm', bold=True, stroke=None):
+              if stroke:
+                  draw.text(pos, s, font=F(size,bold), fill=fill, anchor=anchor, stroke_width=stroke[0], stroke_fill=stroke[1])
+              else:
+                  draw.text(pos, s, font=F(size,bold), fill=fill, anchor=anchor)
+
+          def rounded(draw, box, fill, outline=None, r=28, w=3):
+              draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=w if outline else 1)
+
+          def brand(draw):
+              text(draw, (110, 88), 'meanwhile', 38, WHITE, 'lm')
+              text(draw, (315, 88), 'mash', 38, LIME, 'lm')
+
+          def connector(draw, pts, color=LIME, width=8):
+              draw.line(pts, fill=color, width=width, joint='curve')
+              x,y=pts[-2],pts[-1]
+              draw.ellipse((x-10,y-10,x+10,y+10), fill=color)
+
+          def draw_cube(draw, x,y,s, fill=LIME, outline=None):
+              d=s*0.22
+              front=[(x,y),(x+s,y),(x+s,y+s),(x,y+s)]
+              top=[(x,y),(x+d,y-d),(x+s+d,y-d),(x+s,y)]
+              side=[(x+s,y),(x+s+d,y-d),(x+s+d,y+s-d),(x+s,y+s)]
+              draw.polygon(top, fill=tuple(int(c*0.88) for c in fill))
+              draw.polygon(side, fill=tuple(int(c*0.72) for c in fill))
+              draw.polygon(front, fill=fill, outline=outline)
+
+          def draw_human(draw, cx, cy, scale=1.0, left_arm=1.0, right_arm=1.0, left_leg=1.0, right_leg=1.0,
+                         left_col=WHITE, right_col=WHITE, tilt=0.0, arm_up=False):
+              outline=(88,98,110)
+              head_r=64*scale
+              shoulder=180*scale
+              hip=120*scale
+              torso_h=260*scale
+              shoulder_y=cy-320*scale
+              hip_y=cy-70*scale
+              # head/body
+              draw.ellipse((cx-head_r, cy-460*scale-head_r, cx+head_r, cy-460*scale+head_r), fill=WHITE, outline=outline, width=3)
+              draw.rounded_rectangle((cx-18*scale, cy-395*scale, cx+18*scale, cy-355*scale), radius=int(8*scale), fill=WHITE)
+              left_pts=[(cx, shoulder_y),(cx-shoulder, shoulder_y+tilt*45),(cx-hip, hip_y),(cx, hip_y)]
+              right_pts=[(cx, shoulder_y),(cx+shoulder, shoulder_y-tilt*45),(cx+hip, hip_y),(cx, hip_y)]
+              draw.polygon(left_pts, fill=left_col, outline=outline)
+              draw.polygon(right_pts, fill=right_col, outline=outline)
+              draw.line((cx, shoulder_y, cx, hip_y), fill=outline, width=2)
+              # arms
+              def arm(side, muscle, col, up=False):
+                  sx = cx + side*shoulder
+                  sy = shoulder_y + (-tilt*45 if side>0 else tilt*45)
+                  if up:
+                      ex = sx + side*40*scale
+                      ey = sy - 180*scale
+                      wx = ex + side*25*scale
+                      wy = ey - 150*scale
+                  else:
+                      ex = sx + side*130*scale
+                      ey = sy + 150*scale
+                      wx = ex + side*30*scale
+                      wy = ey + 150*scale
+                  draw.line((sx,sy,ex,ey), fill=col, width=int(32*scale*muscle))
+                  draw.line((ex,ey,wx,wy), fill=col, width=int(26*scale*muscle))
+                  draw.ellipse((wx-20*scale, wy-20*scale, wx+20*scale, wy+20*scale), fill=col, outline=outline, width=2)
+                  return (sx,sy,ex,ey,wx,wy)
+              LA=arm(-1,left_arm,left_col, up=arm_up)
+              RA=arm(1,right_arm,right_col, up=False)
+              # legs
+              def leg(side,muscle,col,raised=False):
+                  sx = cx + side*hip*0.8
+                  sy = hip_y
+                  if raised:
+                      kx = sx + side*40*scale
+                      ky = sy + 120*scale
+                      ax = kx + side*80*scale
+                      ay = ky + 90*scale
+                  else:
+                      kx = sx + side*20*scale
+                      ky = sy + 200*scale
+                      ax = kx + side*10*scale
+                      ay = ky + 190*scale
+                  draw.line((sx,sy,kx,ky), fill=col, width=int(42*scale*muscle))
+                  draw.line((kx,ky,ax,ay), fill=col, width=int(34*scale*muscle))
+                  draw.rounded_rectangle((ax-42*scale, ay-14*scale, ax+70*scale, ay+18*scale), radius=int(10*scale), fill=col, outline=outline, width=2)
+                  return (sx,sy,kx,ky,ax,ay)
+              LL=leg(-1,left_leg,left_col)
+              RL=leg(1,right_leg,right_col)
+              return LA,RA,LL,RL
+
+          def draw_dumbbell(draw, x, y, angle=0):
+              L=120; r=20
+              draw.line((x-L,y,x+L,y), fill=LIME, width=10)
+              for off in [-L-18,-L-44,L+18,L+44]:
+                  draw.rounded_rectangle((x+off-8,y-28,x+off+8,y+28), radius=4, fill=WHITE)
+
+          def draw_panel_card(draw, x, y, w, h, title):
+              rounded(draw, (x,y,x+w,y+h), PANEL, outline=(60,76,90), r=24)
+              text(draw, (x+22,y+36), title, 28, WHITE, 'lm')
+              draw.line((x+20,y+58,x+w-20,y+58), fill=(55,72,84), width=2)
+
+          def draw_bar(draw, x,y,w,h,p,color,label,valtxt):
+              rounded(draw, (x,y,x+w,y+h), PANEL2, outline=(70,84,96), r=16)
+              rounded(draw, (x+8,y+8,x+8+(w-16)*p,y+h-8), color, r=12)
+              text(draw,(x+18,y+h/2+2),label,24,WHITE,'lm')
+              text(draw,(x+w-18,y+h/2+2),valtxt,26,WHITE,'rm')
+
+          def draw_joint_cutaway(draw, cx,cy,r, stress=0.0):
+              # simple knee/shoulder cutaway
+              draw_panel_card(draw, cx-r-20, cy-r-60, r*2+40, r*2+120, 'CUTAWAY')
+              ox, oy = cx, cy+20
+              draw.ellipse((ox-r,oy-r,ox+r,oy+r), outline=(80,90,100), width=5)
+              draw.arc((ox-r+26,oy-r+24,ox+r-30,oy+r-22), start=220, end=30, fill=WHITE, width=18)
+              draw.arc((ox-r+10,oy-r+8,ox+r-46,oy+r-40), start=40, end=220, fill=WHITE, width=18)
+              # cartilage highlight
+              rr=int(r*0.65)
+              draw.arc((ox-rr,oy-rr,ox+rr,oy+rr), start=305, end=55, fill=LIME, width=14)
+              if stress>0:
+                  for ang in [330, 355, 20]:
+                      a=math.radians(ang)
+                      x1=ox+math.cos(a)*(rr+15); y1=oy+math.sin(a)*(rr+15)
+                      x2=ox+math.cos(a)*(rr+70); y2=oy+math.sin(a)*(rr+70)
+                      draw.line((x1,y1,x2,y2), fill=RED, width=7)
+                  text(draw,(ox, oy+r+64),'UNEQUAL STRESS',30,RED)
+
+          writer = imageio.get_writer(os.path.join(OUT,'video_noaudio.mp4'), fps=fps, codec='libx264', quality=8)
+          for fi in range(frames):
+              t = fi/fps
+              s,e,name = get_scene(t)
+              local=(t-s)/(e-s)
+              p=ease(local)
+              base = Image.new('RGBA',(W,H),(*BG,255))
+              d = ImageDraw.Draw(base)
+              draw_grid(d, ox=-60*t, oy=20*t)
+              brand(d)
+              # side panel frame
+              rounded(d, (22, 150, W-22, H-24), (0,0,0,0), outline=(38,50,62), r=28)
+              # subtle glows
+              glow_circle(base, (890,300), 110, (198,255,0), blur=60, alpha=26)
+              glow_circle(base, (200,430), 90, (95,230,255), blur=50, alpha=18)
+              d = ImageDraw.Draw(base)
+
+              if name=='hook':
+                  text(d,(540,275),'WHAT IF YOU EXERCISED',58,WHITE)
+                  text(d,(540,352),'ONLY ONE SIDE OF YOUR BODY?',74,LIME)
+                  LA,RA,LL,RL = draw_human(d, 540, 1160, scale=1.0, left_arm=1.22, left_leg=1.14,
+                                           right_arm=1.0,right_leg=1.0,left_col=LIME,right_col=WHITE)
+                  connector(d, [240,760,240,630,420,630], color=CYAN, width=6)
+                  draw_panel_card(d, 84, 480, 310, 210, 'BODY SCAN')
+                  text(d,(240,560),'LEFT SIDE',32,LIME)
+                  text(d,(240,610),'OVERUSED',42,WHITE)
+                  for idx in range(5):
+                      size=32+idx*16+int(p*36)
+                      d.ellipse((790-size,1040-size,790+size,1040+size), outline=(95,230,255), width=3)
+
+              elif name=='arm':
+                  text(d,(540,252),'ONE ARM GETS STRONGER.',68,LIME)
+                  text(d,(540,324),'ONE SIDE STARTS DOING MORE.',44,WHITE)
+                  LA,RA,LL,RL = draw_human(d, 360, 1150, scale=0.92, left_arm=1.45, right_arm=0.98,
+                                           left_leg=1.0,right_leg=1.0,left_col=LIME,right_col=WHITE, arm_up=True)
+                  draw_dumbbell(d, int(LA[4]-40), int(LA[5]-20))
+                  draw_panel_card(d, 610, 480, 360, 470, 'PERFORMANCE')
+                  draw_bar(d, 640, 580, 300, 70, 0.86, LIME, 'LEFT ARM', f'{int(86*p if p<1 else 86)}%')
+                  draw_bar(d, 640, 680, 300, 70, 0.48+0.04*p, CYAN, 'RIGHT ARM', f'{int(48+4*p)}%')
+                  draw_bar(d, 640, 780, 300, 70, 0.74, YELLOW, 'GRIP', '74%')
+                  text(d,(790,900),'MORE STRENGTH',28,WHITE)
+                  text(d,(790,936),'LESS SYMMETRY',28,RED)
+                  connector(d,[520,970,570,900,610,900], color=LIME, width=8)
+
+              elif name=='leg':
+                  text(d,(540,252),'ONE LEG CAN DOMINATE TOO.',62,LIME)
+                  text(d,(540,324),'POWER GOES UP. BALANCE GOES DOWN.',42,WHITE)
+                  # treadmill / platform module
+                  draw_panel_card(d, 80, 500, 610, 860, 'MOVEMENT TEST')
+                  rounded(d, (160, 1120, 610, 1200), PANEL2, outline=(70,84,96), r=12)
+                  d.line((180,1160,590,1160), fill=SLATE, width=6)
+                  LA,RA,LL,RL = draw_human(d, 385, 1040, scale=0.80, left_arm=1.1,right_arm=1.0,left_leg=1.35,right_leg=0.96,
+                                           left_col=LIME,right_col=WHITE, tilt=0.06)
+                  # lifted left motion ghost
+                  for shift,alp in [(0,120),(16,80),(32,45)]:
+                      ov=Image.new('RGBA',(W,H),(0,0,0,0)); od=ImageDraw.Draw(ov)
+                      draw_human(od, 385-shift, 1040-shift*0.6, scale=0.80, left_arm=1.1,right_arm=1.0,left_leg=1.28,right_leg=0.96,
+                                 left_col=(198,255,0,0) if False else LIME, right_col=WHITE, tilt=0.06)
+                      base.alpha_composite(ov)
+                  # right card
+                  draw_panel_card(d, 730, 585, 250, 300, 'RESULT')
+                  text(d,(855,680),'LEFT LEG',28,LIME)
+                  text(d,(855,730),'POWER',42,WHITE)
+                  text(d,(855,790),'+32%',60,LIME)
+                  connector(d,[690,1040,740,1040,740,885], color=CYAN, width=8)
+                  connector(d,[690,1180,820,1180,820,885], color=LIME, width=8)
+
+              elif name=='posture':
+                  text(d,(540,252),'YOUR POSTURE MAY SHIFT.',70,RED)
+                  text(d,(540,322),'IMBALANCE CHANGES HOW YOU MOVE.',42,WHITE)
+                  LA,RA,LL,RL = draw_human(d, 540, 1160, scale=1.0, left_arm=1.35,right_arm=0.97,left_leg=1.25,right_leg=0.96,
+                                           left_col=LIME,right_col=WHITE, tilt=0.18*p)
+                  d.line((540,500,540,1510), fill=(55,75,90), width=4)
+                  d.line((540,500,610,1510), fill=RED, width=6)
+                  connector(d,[780,760,890,760,890,920], color=RED, width=8)
+                  draw_panel_card(d, 760, 920, 220, 160, 'WARNING')
+                  text(d,(870,995),'LEAN',46,RED)
+                  connector(d,[310,1350,185,1350,185,1480], color=RED, width=8)
+                  draw_panel_card(d, 70, 1480, 250, 160, 'EFFECT')
+                  text(d,(195,1555),'AWKWARD',34,WHITE)
+                  text(d,(195,1600),'MOVEMENT',34,WHITE)
+
+              elif name=='joints':
+                  text(d,(540,250),'JOINTS CAN TAKE UNEVEN STRESS.',56,RED)
+                  text(d,(540,322),'THAT CAN MEAN MORE STRAIN OVER TIME.',40,WHITE)
+                  LA,RA,LL,RL = draw_human(d, 315, 1180, scale=0.82, left_arm=1.30,right_arm=0.98,left_leg=1.2,right_leg=0.98,
+                                           left_col=LIME,right_col=WHITE, tilt=0.10)
+                  draw_joint_cutaway(d, 800, 980, 130, stress=1.0)
+                  connector(d,[450,1260,570,1260,570,980,650,980], color=RED, width=8)
+                  draw_panel_card(d, 690, 1325, 220, 150, 'LOAD')
+                  text(d,(800,1398),'RISK ↑',48,RED)
+                  text(d,(800,1440),'UNEQUAL FORCE',24,WHITE)
+
+              elif name=='balance':
+                  text(d,(540,248),'YES, ONE-SIDED TRAINING',50,WHITE)
+                  text(d,(540,320),'CAN BUILD STRENGTH...',66,LIME)
+                  text(d,(540,395),'BUT BOTH SIDES SHOULD GROW TOGETHER.',42,WHITE)
+                  LA,RA,LL,RL = draw_human(d, 540, 1160, scale=1.0, left_arm=1.14,right_arm=1.14,left_leg=1.12,right_leg=1.12,
+                                           left_col=LIME,right_col=LIME, tilt=0.0)
+                  draw_panel_card(d, 180, 1470, 720, 160, 'FINAL TAKEAWAY')
+                  text(d,(540,1540),'BALANCE BUILDS A BETTER BODY.',44,WHITE)
+                  text(d,(540,1600),'STRENGTH  •  CONTROL  •  SYMMETRY',28,LIME)
+                  connector(d,[280,1100,190,1100], color=LIME, width=8)
+                  connector(d,[800,1100,890,1100], color=LIME, width=8)
+                  text(d,(540,1760),'CURIOSITY WITHOUT LIMITS.',26,SLATE)
+
+              writer.append_data(np.array(base.convert('RGB')))
+          writer.close()
+
+          sr=48000
+          n=int(sr*duration)
+          audio=np.zeros(n, dtype=np.float32)
+          rng=np.random.default_rng(7)
+
+          def add_wave(start,dur,freq=440,amp=0.12,kind='sine',atk=0.004,rel=0.04,pan=0.0):
+              i0=max(0,int(start*sr)); i1=min(n,int((start+dur)*sr))
+              if i1<=i0:return
+              tt=np.linspace(0,dur,i1-i0,endpoint=False)
+              if kind=='sine': w=np.sin(2*np.pi*freq*tt)
+              elif kind=='square': w=np.sign(np.sin(2*np.pi*freq*tt))
+              elif kind=='noise': w=rng.normal(0,1,len(tt))
+              else: w=np.sin(2*np.pi*freq*tt)
+              env=np.ones(len(tt),dtype=np.float32)
+              a=min(len(tt), max(1,int(atk*sr))); r=min(len(tt), max(1,int(rel*sr)))
+              env[:a]=np.linspace(0,1,a)
+              env[-r:]*=np.linspace(1,0,r)
+              audio[i0:i1]+=amp*w*env
+
+          def add_whoosh(start,dur=0.22,f0=220,f1=950,amp=0.10):
+              i0=max(0,int(start*sr)); i1=min(n,int((start+dur)*sr))
+              if i1<=i0:return
+              tt=np.linspace(0,dur,i1-i0,endpoint=False)
+              freqs=np.linspace(f0,f1,len(tt))
+              phase=2*np.pi*np.cumsum(freqs)/sr
+              wave=np.sin(phase)
+              noise=rng.normal(0,0.45,len(tt))
+              env=np.hanning(len(tt))
+              audio[i0:i1]+=amp*(0.7*wave+0.3*noise)*env
+
+          def add_tick_series(start,end,interval=0.12,freq=900,amp=0.05):
+              t=start; flip=0
+              while t<end:
+                  add_wave(t,0.04,freq+flip*110,amp,'square',0.001,0.02)
+                  t+=interval; flip=1-flip
+
+          # ambient technical hum
+          for t in np.arange(0,duration,1.1):
+              add_wave(t,0.24,72,0.018,'sine',0.01,0.12)
+          # hook
+          add_wave(0.0,0.60,58,0.24,'sine',0.003,0.24)
+          add_whoosh(0.22,0.32,300,980,0.13)
+          for t in [1.1,1.55,2.0,2.45]: add_wave(t,0.10,520,0.08,'sine',0.002,0.04)
+          # arm metrics
+          add_tick_series(4.7,9.2,0.11,980,0.05)
+          for t in [5.6,6.6,7.5,8.5]: add_wave(t,0.08,380,0.09,'sine',0.003,0.03)
+          # leg scene
+          add_whoosh(10.2,0.25,210,720,0.11)
+          for t in [11.2,12.7,14.2]: add_wave(t,0.10,640,0.07,'square',0.002,0.03)
+          # posture alerts
+          add_whoosh(15.7,0.28,780,260,0.13)
+          for t in [17.0,18.0,19.1,20.2]: add_wave(t,0.07,720,0.07,'square',0.001,0.02)
+          # joint stress
+          add_wave(21.2,0.28,140,0.14,'sine',0.005,0.14)
+          for t in [22.3,23.0,23.7,24.4,25.1,25.8]:
+              add_wave(t,0.05,840,0.05,'square',0.001,0.02)
+              add_wave(t+0.01,0.11,220,0.04,'noise',0.001,0.06)
+          # ending
+          add_whoosh(27.1,0.30,260,760,0.14)
+          for t in [28.4,29.8,31.1,32.5]: add_wave(t,0.14,460,0.09,'sine',0.003,0.06)
+          add_wave(duration-1.1,0.5,280,0.12,'sine',0.01,0.22)
+          add_wave(duration-0.52,0.16,670,0.07,'square',0.002,0.05)
+
+          audio=np.clip(audio,-0.92,0.92)
+          stereo=np.stack([audio,audio],axis=1)
+          wavwrite(os.path.join(OUT,'sfx.wav'), sr, (stereo*32767).astype(np.int16))
+          subprocess.run(['ffmpeg','-y','-i',os.path.join(OUT,'video_noaudio.mp4'),'-i',os.path.join(OUT,'sfx.wav'),'-c:v','copy','-c:a','aac','-b:a','192k','-shortest',os.path.join(OUT,'MeanwhileMash_One_Side_Body_Technical.mp4')], check=True)
+          PY
+          DURATION="${{ github.event.inputs.duration_sec }}" FPS="${{ github.event.inputs.fps }}" python render.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeanwhileMash_One_Side_Body_Technical
+          path: out/MeanwhileMash_One_Side_Body_Technical.mp4

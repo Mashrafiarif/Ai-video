@@ -1,0 +1,249 @@
+name: MeanwhileMash - True 3D One Side
+on:
+  workflow_dispatch:
+    inputs:
+      quality:
+        type: choice
+        options: [preview, full, stills]
+        default: preview
+      duration_sec:
+        description: Narration duration in seconds (20-65)
+        default: '34'
+        type: string
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      LP_NUM_THREADS: '2'
+      DURATION: ${{ inputs.duration_sec }}
+      QUALITY: ${{ inputs.quality }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install renderer dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core xvfb xauth libgl1 libegl1 libglx-mesa0 libgl1-mesa-dri
+          python -m pip install vtk==9.6.2 numpy pillow
+      - name: Write engine and episode
+        shell: bash
+        run: |
+          cat > engine.py <<'PYCODE'
+          """MeanwhileMash True 3D: reusable VTK rasterizer, articulated mascot, audio events."""
+          import math, os, subprocess, wave
+          from functools import lru_cache
+          import numpy as np
+          import vtk
+          from vtk.util.numpy_support import vtk_to_numpy
+          from PIL import Image, ImageDraw, ImageFont
+          WHITE=(.87,.89,.90); LIME=(.776,1,0); STEEL=(.38,.46,.49); DARK=(.10,.15,.17); RED=(1,.36,.32)
+          V=lambda *x:np.array(x,dtype=float)
+          def ease(t):
+           t=np.clip(t,0,1);return float(t*t*(3-2*t))
+          def mix(a,b,t):return a+(b-a)*t
+          @lru_cache(None)
+          def font(s):return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',s)
+          class Studio:
+           def __init__(self,W,H):
+            self.W,self.H=W,H; self.r=vtk.vtkRenderer();self.r.SetBackground(.035,.075,.09);self.r.SetBackground2(.08,.17,.19);self.r.GradientBackgroundOn()
+            self.win=vtk.vtkRenderWindow();self.win.SetOffScreenRendering(1);self.win.SetMultiSamples(0);self.win.AddRenderer(self.r);self.win.SetSize(W,H)
+            self.r.AutomaticLightCreationOff()
+            for pos,i in [((-4,-4,7),1),((4,-1,4),.55),((1,4,5),.65)]:
+             l=vtk.vtkLight();l.SetLightTypeToSceneLight();l.SetPosition(*pos);l.SetFocalPoint(0,0,1);l.SetIntensity(i);self.r.AddLight(l)
+            self.cam=self.r.GetActiveCamera();self.cam.SetViewUp(0,0,1);self.cam.SetViewAngle(29)
+            self.cap=vtk.vtkWindowToImageFilter();self.cap.SetInput(self.win);self.cap.ReadFrontBufferOff()
+            self.sources={}
+            for kind in ['box','ell','rod']:
+             s={'box':vtk.vtkCubeSource,'ell':vtk.vtkSphereSource,'rod':vtk.vtkCylinderSource}[kind]()
+             if kind=='ell':s.SetRadius(1);s.SetThetaResolution(24);s.SetPhiResolution(18)
+             if kind=='rod':s.SetRadius(1);s.SetHeight(1);s.SetResolution(24)
+             m=vtk.vtkPolyDataMapper();m.SetInputConnection(s.GetOutputPort());self.sources[kind]=m
+           def actor(self,kind,c,pos=(0,0,0),scale=(1,1,1)):
+            a=vtk.vtkActor();a.SetMapper(self.sources[kind]);a.SetPosition(*pos);a.SetScale(*scale);p=a.GetProperty();p.SetColor(*c);p.SetAmbient(.25);p.SetDiffuse(.75);p.SetSpecular(.13);p.SetSpecularPower(24);self.r.AddActor(a);return a
+           def box(self,pos,scale,c):return self.actor('box',c,pos,scale)
+           def ell(self,pos,scale,c):return self.actor('ell',c,pos,scale)
+           def rod(self,a,b,rad,c):
+            ob=self.actor('rod',c);self.segment(ob,a,b,rad);return ob
+           def segment(self,ob,a,b,rad,ell=False):
+            a,b=np.asarray(a),np.asarray(b);d=b-a;L=max(np.linalg.norm(d),1e-6);u=d/L;axis=np.cross([0,1,0],u);ang=math.degrees(math.acos(np.clip(u[1],-1,1)));ob.SetPosition(*((a+b)/2));ob.SetScale(rad,L*(.56 if ell else 1),rad);ob.SetOrientation(0,0,0)
+            if np.linalg.norm(axis)>1e-7:ob.RotateWXYZ(ang,*axis)
+            elif u[1]<0:ob.RotateX(180)
+           def orbit(self,az,dist,z,target):
+            a=math.radians(az);self.cam.SetPosition(dist*math.sin(a),-dist*math.cos(a),z);self.cam.SetFocalPoint(*target);self.r.ResetCameraClippingRange()
+           def frame(self):
+            self.win.Render();self.cap.Modified();self.cap.Update();arr=vtk_to_numpy(self.cap.GetOutput().GetPointData().GetScalars()).reshape(self.H,self.W,3);return Image.fromarray(np.flipud(arr).copy())
+           def close(self):self.win.Finalize()
+           def gym(self):
+            self.box((0,0,-.13),(32,32,.20),(.05,.12,.14))
+            for i in range(-10,11):
+             self.box((i,0,-.024),(.012,20,.01),(.10,.24,.26));self.box((0,i,-.024),(20,.012,.01),(.10,.24,.26))
+            self.box((0,0,.04),(3.6,2.9,.12),DARK);self.box((0,0,.11),(3.45,2.75,.04),STEEL)
+            for x in [-1.1,0,1.1]:self.box((x,0,.134),(.013,2.7,.006),DARK)
+            for x in [-1.2,1.2]:
+             self.box((x,1.04,.66),(.12,.14,1.12),STEEL);self.box((x,1.04,.17),(.39,.5,.09),DARK)
+            self.box((0,1.04,1.15),(2.5,.32,.10),STEEL)
+            for x in np.linspace(-.9,.9,6):
+             self.rod((x-.15,1.04,1.28),(x+.15,1.04,1.28),.025,STEEL)
+             for xx in [x-.13,x+.13]:self.rod((xx-.027,1.04,1.28),(xx+.027,1.04,1.28),.10,DARK)
+          class Mascot:
+           def __init__(self,s):
+            self.s=s;self.parts={};self.weights={};self.shadow={};self.chest={}
+            self.body=[s.ell((0,-.22,1.06),(.235,.15,.17),DARK),s.ell((0,-.22,1.33),(.245,.145,.31),WHITE),s.ell((0,-.22,1.49),(.27,.145,.13),WHITE),s.rod((0,-.22,1.48),(0,-.22,1.66),.065,WHITE),s.ell((0,-.22,1.77),(.105,.10,.145),WHITE)]
+            for k in [-1,1]:
+             c=LIME if k==-1 else WHITE
+             self.chest[k]=s.ell((k*.128,-.32,1.37),(.092,.05,.18),c)
+             self.parts[k]={n:s.actor('ell',c) for n in ['shoulder','upper','elbow','fore','hand','thigh','knee','shin','foot']}
+             self.weights[k]=[s.actor('rod',STEEL)]+[s.actor('rod',DARK) for _ in range(4)]
+             self.shadow[k]=s.ell((k*.18,-.32,.139),(.18,.23,.01),(.20,.28,.28))
+           def pose(self,left=0,right=0,lg=1,rg=1,leglift=0,both=False,weights=(True,False)):
+            s=self.s
+            for k,angle,g in [(-1,left,lg),(1,right,rg)]:
+             c=LIME if k==-1 or both else WHITE;p=self.parts[k];self.chest[k].GetProperty().SetColor(*c);self.chest[k].SetScale(.092*g,.05*g,.18)
+             for n,a in p.items():a.GetProperty().SetColor(*(WHITE if n=='hand' else DARK if n=='foot' else c))
+             sh=V(k*.26,-.22,1.48);el=V(k*.35,-.23,1.14);ha=el+V(k*.012,-.29*math.sin(angle),-.29*math.cos(angle))
+             hip=V(k*.145,-.22,1.05);kn=V(k*.18,-.22,.66);ank=V(k*.18,-.26,.25)
+             if k==-1:
+              kn+=V(0,-.22*leglift,.09*leglift);ank+=V(0,-.27*leglift,.26*leglift)
+             for n,a,b,rad in [('upper',sh,el,.083*g),('fore',el,ha,.062*g),('thigh',hip,kn,.109*g),('shin',kn,ank,.070*g)]:s.segment(p[n],a,b,rad,True)
+             for n,pt,sc in [('shoulder',sh,(.097*g,.095*g,.10*g)),('elbow',el,(.073,.073,.072)),('hand',ha,(.055,.056,.069)),('knee',kn,(.082,.084,.083)),('foot',ank+V(0,-.09,-.05),(.09,.15,.065))]:p[n].SetPosition(*pt);p[n].SetScale(*sc)
+             for a in self.weights[k]:a.SetVisibility(weights[k==1])
+             s.segment(self.weights[k][0],ha+V(-.21,0,0),ha+V(.21,0,0),.024)
+             for a,dx in zip(self.weights[k][1:],[-.19,-.12,.12,.19]):s.segment(a,ha+V(dx-.026,0,0),ha+V(dx+.026,0,0),.095)
+          class Audio:
+           def __init__(self,duration):self.sr=48000;self.a=np.zeros((round(duration*self.sr),2),np.float32);self.rng=np.random.default_rng(77)
+           def event(self,t,kind,pan=0,amp=1):
+            config={'lift':(.17,180,550,.08),'lower':(.13,220,85,.075),'rep':(.15,650,300,.095),'scan':(.32,290,1050,.065),'pulse':(.13,720,480,.055),'step':(.16,130,48,.11),'shift':(.35,350,100,.075),'resolve':(.26,390,780,.085),'hook':(.36,115,38,.16),'chime':(.19,620,900,.08)}
+            d,f0,f1,g=config[kind];i=max(0,round(t*self.sr));n=min(len(self.a)-i,round(d*self.sr));
+            if n<=0:return
+            q=np.arange(n)/self.sr;phase=2*np.pi*(f0*q+(f1-f0)*q*q/(2*d));env=np.sin(np.pi*np.clip(q/d,0,1))**1.5;noise=self.rng.normal(0,1,n)*(.12 if kind in ['step','lift','lower','shift'] else .025);w=(np.sin(phase)+.18*np.sin(phase*2)+noise)*env*g*amp
+            self.a[i:i+n,0]+=w*math.sqrt((1-pan)/2);self.a[i:i+n,1]+=w*math.sqrt((1+pan)/2)
+           def save(self,path):
+            peak=max(1e-8,float(np.max(np.abs(self.a))));a=self.a*min(1,.45/peak)
+            with wave.open(path,'wb') as f:f.setnchannels(2);f.setsampwidth(2);f.setframerate(self.sr);f.writeframes((a*32767).astype('<i2').tobytes())
+          def encode(frames,W,H,fps,path):
+           p=subprocess.Popen(['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(fps),'-i','-','-c:v','libx264','-preset','veryfast','-crf','19','-pix_fmt','yuv420p','-threads','2',path],stdin=subprocess.PIPE)
+           try:
+            for im in frames:p.stdin.write(im.convert('RGB').tobytes())
+           finally:p.stdin.close()
+           if p.wait():raise RuntimeError('FFmpeg encoder failed')
+          def overlay(im,headline,footer,progress,cta=0):
+           d=ImageDraw.Draw(im);W,H=im.size;u=W/450
+           def F(k):return font(max(10,round(k*u)))
+           def label(txt,y,size,color,anchor='mm',x=None):
+            f=F(size)
+            while d.textlength(txt,font=f)>W*.86 and f.size>10:f=font(f.size-1)
+            d.text((W/2 if x is None else x,y*H),txt,font=f,fill=color,anchor=anchor,stroke_width=max(1,round(u)),stroke_fill='#102226')
+           f=F(17);x=22*u;y=.033*H;d.text((x,y),'meanwhile',font=f,fill='#F5F5F5');d.text((x+d.textlength('meanwhile',font=f),y),'mash',font=f,fill='#C6FF00')
+           label(headline,.111,30,'#F5F5F5');label(footer,.866,22,'#C6FF00')
+           d.rounded_rectangle((W*.10,H*.925,W*.90,H*.931),radius=max(1,round(2*u)),fill='#34474D');d.rounded_rectangle((W*.10,H*.925,W*(.10+.8*max(.005,progress)),H*.931),radius=max(1,round(2*u)),fill='#C6FF00')
+           if cta>0:
+            x0=W*.18;x1=W*.82;y0=H*(.76+.045*(1-ease(cta)));y1=y0+H*.052
+            d.rounded_rectangle((x0,y0,x1,y1),radius=round(12*u),fill='#C6FF00');d.text((W/2,(y0+y1)/2),'SUBSCRIBE  •  meanwhilemash',font=F(13),fill='#101820',anchor='mm')
+           return im
+          PYCODE
+          cat > episode.py <<'PYCODE'
+          """One-sided training demonstration; qualitative illustrations, no invented measurements."""
+          import argparse, os, math, subprocess
+          import numpy as np
+          from PIL import ImageDraw
+          from engine import Studio,Mascot,Audio,encode,overlay,ease,mix,font,V,LIME,WHITE,STEEL,DARK
+          P=argparse.ArgumentParser();P.add_argument('--duration',type=float,default=34);P.add_argument('--fps',type=int,default=24);P.add_argument('--width',type=int,default=1080);P.add_argument('--height',type=int,default=1920);P.add_argument('--out',default='out');P.add_argument('--still',action='store_true');args=P.parse_args()
+          assert 20<=args.duration<=65 and 8<=args.fps<=30 and args.width%2==0 and args.height%2==0
+          os.makedirs(args.out,exist_ok=True);D=args.duration;scale=D/34;S=Studio(args.width,args.height);S.gym();M=Mascot(S)
+          # Additional 3D props: force/balance platform, neural-connection beads; no fictional percentages.
+          beam=S.box((0,-.95,.26),(1.22,.12,.065),STEEL);pivot=S.rod((0,-.95,.15),(0,-.95,.28),.09,DARK);discs=[S.ell((k*.52,-.95,.29),(.17,.17,.035),LIME if k==-1 else WHITE) for k in [-1,1]]
+          beads=[S.ell((0,0,0),(.022,.022,.022),LIME) for i in range(18)]
+          for a in [beam,pivot,*discs,*beads]:a.VisibilityOff()
+          # transparent upper-arm sleeve and muscle bundle inside, illustrative cutaway
+          shell=S.actor('ell',WHITE);shell.GetProperty().SetOpacity(.19);fibers=[S.actor('ell',LIME) for _ in range(5)]
+          for a in [shell,*fibers]:a.VisibilityOff()
+          shadow=M.shadow
+          # Timings are relative to narration; set duration to measured audio length.
+          starts=[0,4,9,14,20,26,30,34]
+          labels=[('ONLY ONE SIDE?','ONE-SIDED TRAINING'),('THE WORKING ARM','MUSCLE GROWTH'),('THE WORKING LEG','SPECIFIC STRENGTH'),('A SURPRISING EFFECT','CROSS-EDUCATION'),('UNEVEN DEVELOPMENT','ILLUSTRATIVE COMPARISON'),('TRAIN BOTH SIDES','ONE-SIDED EXERCISES CAN HELP'),('KEEP BOTH SIDES ACTIVE','CURIOSITY WITHOUT LIMITS')]
+          def scene(t):
+           i=int(np.searchsorted(starts[1:],t,side='right'));i=min(6,i);p=(t-starts[i])/(starts[i+1]-starts[i]);return i,max(0,min(1,p))
+          def curl(p,cycles=2):return math.radians(120)*(.5-.5*math.cos(2*math.pi*cycles*p))
+          def render(t):
+           i,p=scene(t);q=ease(p)
+           for a in [beam,pivot,*discs,*beads,shell,*fibers]:a.VisibilityOff()
+           for k in [-1,1]:M.parts[k]['upper'].VisibilityOn()
+           if i==0:
+            M.pose(left=curl(p,2),lg=1.05);S.orbit(mix(-32,15,q),mix(4.9,4.35,q),2.55,V(0,.05,1.0))
+           elif i==1:
+            M.pose(left=curl(p,2),lg=mix(1.05,1.30,q));S.orbit(mix(-38,-20,q),mix(4.5,2.95,q),mix(2.3,1.9,q),V(-.20,-.2,1.37))
+            # Reveal a stylized muscle bundle within the upper-arm shell, not a clinical anatomical model.
+            if p>.42:
+             M.parts[-1]['upper'].VisibilityOff();sh=V(-.26,-.22,1.48);el=V(-.35,-.23,1.14);S.segment(shell,sh,el,.11,True);shell.VisibilityOn()
+             for j,a in enumerate(fibers):
+              off=V((j-2)*.025,-.022,0);S.segment(a,sh+off,el+off,.020+.009*q,True);a.VisibilityOn()
+           elif i==2:
+            l=.5-.5*math.cos(4*math.pi*p);M.pose(lg=1.22,leglift=l,weights=(False,False));S.orbit(mix(-24,26,q),3.95,1.55,V(0,-.24,.85))
+           elif i==3:
+            M.pose(left=curl(p,2),lg=1.24,weights=(True,False));S.orbit(mix(-18,10,q),3.9,2.15,V(0,-.22,1.30))
+            # Schematic neural signal traveling from working arm through upper body to opposite limb.
+            path=np.array([[-.35,-.40,1.15],[-.26,-.40,1.49],[0,-.38,1.72],[.26,-.40,1.49],[.35,-.40,1.15]])
+            for j,a in enumerate(beads):
+             f=(p*3+j*.045)%1;v=f*(len(path)-1);k=min(3,int(v));pos=mix(path[k],path[k+1],v-k);a.SetPosition(*pos);a.SetScale(.014+.011*(1-j/18),.020,.020);a.VisibilityOn()
+           elif i==4:
+            M.pose(lg=1.30,rg=1.0,weights=(False,False));S.orbit(mix(-24,19,q),4.75,2.3,V(0,0,1.01))
+            # abstract symmetry indicator, not a claim about joint injury or posture.
+            for a in [beam,pivot,*discs]:a.VisibilityOn()
+            angle=-12*math.sin(math.pi*p);beam.SetOrientation(0,angle,0)
+            for k,a in zip([-1,1],discs):a.SetPosition(k*.52,-.95,.30-k*.52*math.sin(math.radians(angle)))
+           elif i==5:
+            M.pose(left=curl(p,2),right=curl(p,2),lg=mix(1.30,1.20,q),rg=mix(1,1.20,q),both=True,weights=(True,True));S.orbit(mix(18,-18,q),4.8,2.4,V(0,0,1.07))
+           else:
+            M.pose(left=curl(p,1),right=curl(p,1),lg=1.2,rg=1.2,both=True,weights=(True,True));S.orbit(mix(-18,5,q),4.8,2.45,V(0,0,1.02))
+           im=S.frame();return overlay(im,*labels[i],min(1,t/34),0 if i<6 else min(1,p*4))
+          if args.still:
+           for i in range(7):render((starts[i]+starts[i+1])/2).save(f'{args.out}/scene_{i+1}.png')
+          else:
+           def frames():
+            for f in range(round(D*args.fps)):
+             if f%max(1,args.fps*4)==0:print(f'Frame {f}/{round(D*args.fps)}',flush=True)
+             yield render(f/args.fps/scale)
+           encode(frames(),args.width,args.height,args.fps,f'{args.out}/visual.mp4')
+           A=Audio(D)
+           def e(t,k,pan=0,amp=1):A.event(t*scale,k,pan,amp)
+           for t in starts[:-1]:e(t,'hook' if t==0 else 'scan',amp=.85)
+           # Motion events use exactly the same phase as the arm/leg cycles.
+           for i in [0,1,3,5,6]:
+            st,en=starts[i:i+2];n=1 if i==6 else 2
+            for j in range(n):
+             a=st+j*(en-st)/n;period=(en-st)/n;pan=0 if i>=5 else -.4
+             e(a+.08*period,'lift',pan);e(a+.5*period,'rep',pan);e(a+.70*period,'lower',pan)
+           for j in range(2):
+            a=9+j*2.5;e(a+.25,'lift',-.4);e(a+1.25,'rep',-.4);e(a+2.40,'step',-.4)
+           e(11.1,'scan',amp=.6)
+           e(4+5*.42,'scan');
+           for t in np.linspace(14.2,19.7,15):e(float(t),'pulse',pan=mix(-.5,.5,((t-14)/2)%1),amp=.7)
+           e(20.2,'shift');e(23,'resolve',amp=.7);e(26.1,'resolve');e(30,'chime');e(30.25,'chime',amp=.7)
+           A.save(f'{args.out}/sfx.wav')
+           subprocess.run(['ffmpeg','-v','error','-y','-i',f'{args.out}/visual.mp4','-i',f'{args.out}/sfx.wav','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',f'{args.out}/MeanwhileMash_One_Side_True3D.mp4'],check=True)
+          S.close()
+          PYCODE
+      - name: Render true 3D episode
+        shell: bash
+        run: |
+          case "$QUALITY" in
+            preview) set -- --width 360 --height 640 --fps 12 ;;
+            full) set -- --width 1080 --height 1920 --fps 24 ;;
+            stills) set -- --width 450 --height 800 --still ;;
+            *) exit 1 ;;
+          esac
+          xvfb-run -a -s '-screen 0 1280x2048x24' python episode.py --duration "$DURATION" "$@"
+      - name: Upload output
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeanwhileMash-True3D-${{ inputs.quality }}
+          path: |
+            out/MeanwhileMash_One_Side_True3D.mp4
+            out/scene_*.png
+          if-no-files-found: error
+          retention-days: 7

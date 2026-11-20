@@ -1,0 +1,309 @@
+name: Bengali Reel Animation Pack
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Path to extracted voice WAV or facecam MP4 in this private repo
+        default: input/voice.wav
+        required: true
+      model:
+        description: Whisper model (medium is slower but generally more accurate)
+        type: choice
+        options: [small, medium]
+        default: medium
+      width:
+        description: Animation resolution width
+        type: choice
+        options: ['720', '1080']
+        default: '720'
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/huggingface/hub
+          key: reel-v1-${{ runner.os }}-${{ inputs.model }}
+          restore-keys: reel-v1-${{ runner.os }}-
+      - name: Install renderer and speech recognition
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! fc-list :lang=bn | grep . >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg fonts-noto-core
+          fi
+          python -m pip install faster-whisper==1.1.1 pillow==11.3.0
+      - name: Transcribe, translate and render
+        env:
+          SOURCE: ${{ inputs.source }}
+          MODEL: ${{ inputs.model }}
+          WIDTH: ${{ inputs.width }}
+        shell: bash
+        run: |
+          mkdir -p output
+          cat > render.py <<'PY'
+          import os, re, math, json, wave, subprocess
+          from pathlib import Path
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont
+          from faster_whisper import WhisperModel
+
+          src = os.environ['SOURCE']
+          out = Path('output')
+          out.mkdir(exist_ok=True)
+          W = int(os.environ.get('WIDTH','720'))
+          H = W * 16 // 9
+          FPS = 30
+          S = W / 720
+          duration = float(subprocess.check_output([
+              'ffprobe','-v','error','-show_entries','format=duration',
+              '-of','default=nw=1:nk=1',src], text=True).strip())
+          subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y',
+              '-i',src,'-vn','-ac','1','-ar','16000','speech.wav'],check=True)
+          model = WhisperModel(os.environ.get('MODEL','medium'),
+                               device='cpu',compute_type='int8',cpu_threads=4)
+          def recognize(task):
+              segs,_ = model.transcribe('speech.wav',language='bn',task=task,
+                  beam_size=5,vad_filter=True,condition_on_previous_text=False)
+              return [{'start':max(0,float(s.start)),
+                       'end':min(duration,float(s.end)),'text':s.text.strip()}
+                      for s in segs if s.text.strip() and s.end>s.start]
+          def stamp(t):
+              ms=round(max(0,t)*1000)
+              h,ms=divmod(ms,3600000); m,ms=divmod(ms,60000)
+              s,ms=divmod(ms,1000)
+              return f'{h:02}:{m:02}:{s:02},{ms:03}'
+          def srt(name,rows):
+              (out/name).write_text('\n\n'.join(
+                  f"{i}\n{stamp(r['start'])} --> {stamp(r['end'])}\n{r['text']}"
+                  for i,r in enumerate(rows,1))+'\n',encoding='utf-8')
+          bn=recognize('transcribe'); srt('captions_bn.srt',bn)
+          en=recognize('translate'); srt('meaning_en.srt',en)
+          if not bn or not en:
+              raise RuntimeError('No speech recognized; check the source audio.')
+          (out/'transcript_en.txt').write_text('\n'.join(
+              f"{stamp(r['start'])} {r['text']}" for r in en),encoding='utf-8')
+
+          # Choose animation motifs using the actual translated speech.
+          rules = [
+              ('attention',r'\b(hook|skip|scroll|attention|seconds?|watch)\b','মনোযোগ'),
+              ('price',r'\b(price|discount|cheap|expensive|money|offer|cost|budget)\b','মূল্য'),
+              ('mind',r'\b(brain|mind|psychology|emotion|feeling|think|decision|desire)\b','সিদ্ধান্ত'),
+              ('trust',r'\b(trust|proof|review|quality|believe|risk|confidence)\b','বিশ্বাস'),
+              ('compare',r'\b(same|different|versus|competitor|compare|better|instead)\b','তুলনা'),
+              ('audience',r'\b(audience|customer|people|buyer|target|person|consumers?)\b','গ্রাহক'),
+              ('product',r'\b(product|feature|service|item|benefit|solution|problem)\b','প্রোডাক্ট'),
+              ('funnel',r'\b(click|message|conversion|funnel|order|purchase|buy)\b','কেনার যাত্রা'),
+              ('growth',r'\b(sales?|sell|revenue|growth|profit|results?|performance)\b','ফলাফল'),
+              ('attention',r'\b(ad|ads|advertisement|advertising|content|creative|video)\b','বিজ্ঞাপন')]
+          def classify(text):
+              for mode,pat,label in rules:
+                  if re.search(pat,text,re.I): return mode,label
+              return 'abstract',''
+          cuts=[0.0]
+          for r in en:
+              t=r['start']
+              if t-cuts[-1]>=2.4 and duration-t>=1.0:
+                  while t-cuts[-1]>5.5: cuts.append(cuts[-1]+4.0)
+                  cuts.append(t)
+          while duration-cuts[-1]>5.5: cuts.append(cuts[-1]+4.0)
+          cuts.append(duration)
+          scenes=[]
+          for a,b in zip(cuts,cuts[1:]):
+              spoken=' '.join(r['text'] for r in en if r['end']>a and r['start']<b)
+              mode,label=classify(spoken)
+              scenes.append(dict(start=round(a,3),end=round(b,3),
+                                 mode=mode,label=label,english=spoken))
+          (out/'scene_map.json').write_text(json.dumps(scenes,ensure_ascii=False,indent=2),encoding='utf-8')
+
+          # Premium vector motion design, with a clean lower caption area.
+          BG=(12,20,33); PANEL=(24,39,56); WHITE=(237,245,248)
+          MUTE=(88,112,133); TEAL=(63,227,193); GOLD=(255,193,95)
+          RED=(250,112,119); BLUE=(112,169,255)
+          fontpath=subprocess.check_output(['fc-match','-f','%{file}',
+                        'Noto Sans Bengali:lang=bn'],text=True).strip()
+          label_font=ImageFont.truetype(fontpath,round(47*S))
+          def xy(x,y): return (round(x*S),round(y*S))
+          def rect(x,y,w,h): return (*xy(x,y),*xy(x+w,y+h))
+          def rr(d,x,y,w,h,c,r=24,outline=None,sw=2):
+              d.rounded_rectangle(rect(x,y,w,h),radius=round(r*S),fill=c,
+                  outline=outline,width=max(1,round(sw*S)))
+          def line(d,pts,c,w=4):
+              d.line([xy(*p) for p in pts],fill=c,width=max(1,round(w*S)),joint='curve')
+          def circle(d,x,y,r,c,outline=None,w=2):
+              d.ellipse(rect(x-r,y-r,2*r,2*r),fill=c,outline=outline,
+                        width=max(1,round(w*S)))
+          def ease(t):
+              t=max(0,min(1,t)); return 1-(1-t)**3
+          def arrow(d,x,y,x2,y2,c):
+              line(d,[(x,y),(x2,y2)],c,5)
+              a=math.atan2(y2-y,x2-x)
+              for q in [-.55,.55]:
+                  line(d,[(x2,y2),(x2-18*math.cos(a+q),y2-18*math.sin(a+q))],c,5)
+          def tick(d,x,y,c): line(d,[(x-17,y),(x-4,y+15),(x+22,y-16)],c,7)
+          def person(d,x,y,c,scale=1):
+              circle(d,x,y-24*scale,17*scale,c)
+              rr(d,x-26*scale,y,52*scale,45*scale,c,15)
+          def card(d,x,y,w,h,c=PANEL):
+              rr(d,x+7,y+12,w,h,(7,13,23),25)
+              rr(d,x,y,w,h,c,25,outline=(48,68,84))
+          def bars(d,x,y,n=3):
+              for j in range(n): rr(d,x,y+j*22,120-j*17,8,MUTE,4)
+          # Static background is precomputed once.
+          base=Image.new('RGB',(W,H),BG); bd=ImageDraw.Draw(base)
+          for y in range(0,1280,8):
+              f=1-abs(y-480)/900
+              bd.rectangle(rect(0,y,720,8),fill=(12+int(max(0,f)*5),
+                           20+int(max(0,f)*12),33+int(max(0,f)*13)))
+          for x in range(40,720,64):
+              for y in range(180,1020,64): circle(bd,x,y,1.3,(39,61,75))
+          def render_frame(scene,t,index):
+              im=base.copy(); d=ImageDraw.Draw(im)
+              mode=scene['mode']; a=ease(t/.45); p=(math.sin(t*3)+1)/2
+              shift=36*(1-a)
+              rr(d,65,180,50*a,5,TEAL,3)
+              if scene['label']:
+                  d.text(xy(65,212+shift),scene['label'],font=label_font,fill=WHITE)
+              if mode=='attention':
+                  card(d,211,355+shift,298,540)
+                  rr(d,231,385+shift,258,470,(13,25,40),20)
+                  for j in range(3):
+                      y=420+j*120-((t*65)%70)+shift
+                      rr(d,253,y,214,95,PANEL,14)
+                      rr(d,267,y+12,70,69,BLUE if j==1 else MUTE,10)
+                      rr(d,350,y+24,95,8,WHITE,4)
+                      rr(d,350,y+44,64,7,MUTE,4)
+                  circle(d,490,505,31+9*p,TEAL)
+                  arrow(d,490,521,490,482,BG)
+              elif mode=='compare':
+                  for j,c in enumerate([RED,TEAL]):
+                      x=65+j*310; y=400+shift+20*(1-a)*j
+                      card(d,x,y,280,410)
+                      rr(d,x+25,y+28,230,145,MUTE if j==0 else (36,95,94),16)
+                      circle(d,x+140,y+100,37,c)
+                      bars(d,x+35,y+200)
+                      circle(d,x+140,y+320,40,c)
+                      if j: tick(d,x+140,y+320,BG)
+                      else:
+                          line(d,[(x+124,y+304),(x+156,y+336)],BG,7)
+                          line(d,[(x+124,y+336),(x+156,y+304)],BG,7)
+              elif mode=='price':
+                  card(d,140,405+shift,440,380)
+                  rr(d,195,465+shift,330,135,GOLD,20)
+                  circle(d,228,530+shift,12,BG)
+                  for x,y in [(332,503),(409,563)]: circle(d,x,y+shift,22,BG)
+                  line(d,[(329,566+shift),(412,499+shift)],BG,9)
+                  for j in range(3):
+                      rr(d,214+j*100,675+shift,72,14+45*ease(t*1.7-j*.3),TEAL,7)
+              elif mode=='mind':
+                  cx,cy=360,600+shift
+                  for j in range(8):
+                      angle=j*math.tau/8+t*.12
+                      x=cx+205*math.cos(angle); y=cy+150*math.sin(angle)
+                      line(d,[(cx,cy),(x,y)],MUTE,3)
+                      circle(d,x,y,16+5*p,TEAL if j%2==0 else BLUE)
+                  circle(d,cx,cy,120,PANEL,TEAL,3)
+                  for j in range(6):
+                      angle=j*math.tau/6
+                      circle(d,cx+58*math.cos(angle),cy+48*math.sin(angle),35,BLUE)
+                  circle(d,cx,cy,33,TEAL)
+              elif mode=='trust':
+                  card(d,135,385+shift,450,445)
+                  pts=[(360,440+shift),(470,485+shift),(450,650+shift),
+                       (360,720+shift),(270,650+shift),(250,485+shift)]
+                  d.polygon([xy(*q) for q in pts],fill=TEAL)
+                  tick(d,360,582+shift,BG)
+                  for j in range(5): circle(d,245+j*57,770+shift,10+3*p,GOLD)
+              elif mode=='audience':
+                  for j in range(9):
+                      x=152+(j%3)*208; y=420+(j//3)*151+shift
+                      c=TEAL if j==4 else MUTE
+                      if j==4: circle(d,x,y+7,68+8*p,None,TEAL,3)
+                      person(d,x,y,c,1.2)
+              elif mode=='product':
+                  card(d,135,360+shift,450,500)
+                  cx,cy=360,550+shift
+                  d.polygon([xy(cx,cy-112),xy(cx+133,cy-45),xy(cx,cy+25),xy(cx-133,cy-45)],fill=BLUE)
+                  d.polygon([xy(cx-133,cy-45),xy(cx,cy+25),xy(cx,cy+158),xy(cx-133,cy+87)],fill=(45,101,175))
+                  d.polygon([xy(cx,cy+25),xy(cx+133,cy-45),xy(cx+133,cy+87),xy(cx,cy+158)],fill=(54,151,165))
+                  for j in range(3):
+                      circle(d,288+j*72,805+shift,8+3*p,TEAL)
+              elif mode=='funnel':
+                  for j,c in enumerate([BLUE,TEAL,GOLD]):
+                      w=440-j*110; x=(720-w)/2; y=380+j*145+shift
+                      rr(d,x,y,w,104,c,18)
+                      if j<2: arrow(d,360,y+109,360,y+140,MUTE)
+                      for k in range(3-j):
+                          circle(d,360+(k-(2-j)/2)*38,y+52,12,BG)
+              elif mode=='growth':
+                  card(d,95,385+shift,530,435)
+                  line(d,[(145,445+shift),(145,750+shift),(575,750+shift)],MUTE,3)
+                  for j,h in enumerate([75,145,115,220,260]):
+                      v=h*ease(t*1.6-j*.12)
+                      if v>0:
+                          rr(d,177+j*76,750+shift-v,52,v,TEAL if j==4 else BLUE,8)
+              else:
+                  cx,cy=360,608+shift
+                  for j in range(5):
+                      r=55+j*38+7*p
+                      circle(d,cx,cy,r,None,TEAL if j==0 else MUTE,2)
+                  for j in range(3):
+                      angle=t*.55+j*math.tau/3
+                      circle(d,cx+150*math.cos(angle),cy+150*math.sin(angle),16,[TEAL,BLUE,GOLD][j])
+                  circle(d,cx,cy,35,TEAL)
+              if t<.18:
+                  im=Image.blend(base,im,ease(t/.18))
+              return im
+
+          frames=math.ceil(duration*FPS)
+          proc=subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-y',
+              '-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),
+              '-i','-','-an','-c:v','libx264','-preset','veryfast','-crf','19',
+              '-pix_fmt','yuv420p','-movflags','+faststart',str(out/'animations.mp4')],
+              stdin=subprocess.PIPE)
+          idx=0
+          try:
+              for i in range(frames):
+                  t=i/FPS
+                  while idx+1<len(scenes) and t>=scenes[idx]['end']:
+                      idx+=1
+                  proc.stdin.write(render_frame(scenes[idx],t-scenes[idx]['start'],idx).tobytes())
+          finally:
+              proc.stdin.close()
+              if proc.wait()!=0:
+                  raise RuntimeError('FFmpeg render failed')
+
+          # Original transition SFX on the exact source timeline.
+          rate=48000
+          audio=np.zeros(math.ceil(duration*rate),dtype=np.float32)
+          for scene in scenes:
+              start=round(scene['start']*rate)
+              n=min(round(.19*rate),len(audio)-start)
+              if n<=0: continue
+              t=np.arange(n)/rate
+              env=np.sin(np.pi*np.arange(n)/n)**2
+              freq={'attention':760,'price':550,'mind':420,'trust':620,
+                    'compare':500,'audience':480,'product':350,'funnel':440,
+                    'growth':680}.get(scene['mode'],390)
+              audio[start:start+n]+=.08*env*np.sin(2*np.pi*(freq*t+500*t*t))
+          with wave.open(str(out/'transition_sfx.wav'),'wb') as f:
+              f.setparams((1,2,rate,0,'NONE','not compressed'))
+              f.writeframes((np.clip(audio,-1,1)*32767).astype('<i2').tobytes())
+          print(f'Rendered {frames} frames, {len(scenes)} scenes, {duration:.2f} seconds')
+          PY
+          python render.py
+      - name: Downloadable animation and caption pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: bengali-reel-pack
+          path: output/
+          if-no-files-found: error
+          retention-days: 7

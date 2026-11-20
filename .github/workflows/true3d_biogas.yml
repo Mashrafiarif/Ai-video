@@ -1,0 +1,299 @@
+name: MeanwhileMash - True 3D Biogas
+on:
+  workflow_dispatch:
+    inputs:
+      quality:
+        type: choice
+        options: [preview, full, stills]
+        default: preview
+      duration_sec:
+        description: Narration duration in seconds (20-65)
+        default: '42'
+        type: string
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      LP_NUM_THREADS: '2'
+      DURATION: ${{ inputs.duration_sec }}
+      QUALITY: ${{ inputs.quality }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install renderer dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-dejavu-core xvfb xauth libgl1 libegl1 libglx-mesa0 libgl1-mesa-dri
+          python -m pip install vtk==9.6.2 numpy pillow
+      - name: Write engine and episode
+        shell: bash
+        run: |
+          cat > engine.py <<'PYCODE'
+          """MeanwhileMash True 3D: reusable VTK rasterizer and original audio events."""
+          import math, os, subprocess, wave
+          from functools import lru_cache
+          import numpy as np
+          import vtk
+          from vtk.util.numpy_support import vtk_to_numpy
+          from PIL import Image, ImageDraw, ImageFont
+          WHITE=(.87,.89,.90); LIME=(.776,1,0); STEEL=(.38,.46,.49); DARK=(.10,.15,.17); RED=(1,.36,.32)
+          V=lambda *x:np.array(x,dtype=float)
+          def ease(t):
+           t=np.clip(t,0,1);return float(t*t*(3-2*t))
+          def mix(a,b,t):return a+(b-a)*t
+          @lru_cache(None)
+          def font(s):return ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',s)
+          class Studio:
+           def __init__(self,W,H):
+            self.W,self.H=W,H; self.r=vtk.vtkRenderer();self.r.SetBackground(.035,.075,.09);self.r.SetBackground2(.08,.17,.19);self.r.GradientBackgroundOn()
+            self.win=vtk.vtkRenderWindow();self.win.SetOffScreenRendering(1);self.win.SetMultiSamples(0);self.win.AddRenderer(self.r);self.win.SetSize(W,H)
+            self.r.AutomaticLightCreationOff()
+            for pos,i in [((-4,-4,7),1),((4,-1,4),.55),((1,4,5),.65)]:
+             l=vtk.vtkLight();l.SetLightTypeToSceneLight();l.SetPosition(*pos);l.SetFocalPoint(0,0,1);l.SetIntensity(i);self.r.AddLight(l)
+            self.cam=self.r.GetActiveCamera();self.cam.SetViewUp(0,0,1);self.cam.SetViewAngle(29)
+            self.cap=vtk.vtkWindowToImageFilter();self.cap.SetInput(self.win);self.cap.ReadFrontBufferOff()
+            self.sources={}
+            for kind in ['box','ell','rod']:
+             s={'box':vtk.vtkCubeSource,'ell':vtk.vtkSphereSource,'rod':vtk.vtkCylinderSource}[kind]()
+             if kind=='ell':s.SetRadius(1);s.SetThetaResolution(24);s.SetPhiResolution(18)
+             if kind=='rod':s.SetRadius(1);s.SetHeight(1);s.SetResolution(24)
+             m=vtk.vtkPolyDataMapper();m.SetInputConnection(s.GetOutputPort());self.sources[kind]=m
+           def actor(self,kind,c,pos=(0,0,0),scale=(1,1,1)):
+            a=vtk.vtkActor();a.SetMapper(self.sources[kind]);a.SetPosition(*pos);a.SetScale(*scale);p=a.GetProperty();p.SetColor(*c);p.SetAmbient(.25);p.SetDiffuse(.75);p.SetSpecular(.13);p.SetSpecularPower(24);self.r.AddActor(a);return a
+           def box(self,pos,scale,c):return self.actor('box',c,pos,scale)
+           def ell(self,pos,scale,c):return self.actor('ell',c,pos,scale)
+           def rod(self,a,b,rad,c):
+            ob=self.actor('rod',c);self.segment(ob,a,b,rad);return ob
+           def segment(self,ob,a,b,rad,ell=False):
+            a,b=np.asarray(a),np.asarray(b);d=b-a;L=max(np.linalg.norm(d),1e-6);u=d/L;axis=np.cross([0,1,0],u);ang=math.degrees(math.acos(np.clip(u[1],-1,1)));ob.SetPosition(*((a+b)/2));ob.SetScale(rad,L*(.56 if ell else 1),rad);ob.SetOrientation(0,0,0)
+            if np.linalg.norm(axis)>1e-7:ob.RotateWXYZ(ang,*axis)
+            elif u[1]<0:ob.RotateX(180)
+           def orbit(self,az,dist,z,target):
+            a=math.radians(az);self.cam.SetPosition(dist*math.sin(a),-dist*math.cos(a),z);self.cam.SetFocalPoint(*target);self.r.ResetCameraClippingRange()
+           def frame(self):
+            self.win.Render();self.cap.Modified();self.cap.Update();arr=vtk_to_numpy(self.cap.GetOutput().GetPointData().GetScalars()).reshape(self.H,self.W,3);return Image.fromarray(np.flipud(arr).copy())
+           def close(self):self.win.Finalize()
+          class Audio:
+           def __init__(self,duration):self.sr=48000;self.a=np.zeros((round(duration*self.sr),2),np.float32);self.rng=np.random.default_rng(77)
+           def event(self,t,kind,pan=0,amp=1):
+            config={'lift':(.17,180,550,.08),'lower':(.13,220,85,.075),'rep':(.15,650,300,.095),'scan':(.32,290,1050,.065),'pulse':(.13,720,480,.055),'step':(.16,130,48,.11),'shift':(.35,350,100,.075),'resolve':(.26,390,780,.085),'hook':(.36,115,38,.16),'chime':(.19,620,900,.08)}
+            d,f0,f1,g=config[kind];i=max(0,round(t*self.sr));n=min(len(self.a)-i,round(d*self.sr))
+            if n<=0:return
+            q=np.arange(n)/self.sr;phase=2*np.pi*(f0*q+(f1-f0)*q*q/(2*d));env=np.sin(np.pi*np.clip(q/d,0,1))**1.5;noise=self.rng.normal(0,1,n)*(.12 if kind in ['step','lift','lower','shift'] else .025);w=(np.sin(phase)+.18*np.sin(phase*2)+noise)*env*g*amp
+            self.a[i:i+n,0]+=w*math.sqrt((1-pan)/2);self.a[i:i+n,1]+=w*math.sqrt((1+pan)/2)
+           def save(self,path):
+            peak=max(1e-8,float(np.max(np.abs(self.a))));a=self.a*min(1,.45/peak)
+            with wave.open(path,'wb') as f:f.setnchannels(2);f.setsampwidth(2);f.setframerate(self.sr);f.writeframes((a*32767).astype('<i2').tobytes())
+          def encode(frames,W,H,fps,path):
+           p=subprocess.Popen(['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(fps),'-i','-','-c:v','libx264','-preset','veryfast','-crf','19','-pix_fmt','yuv420p','-threads','2',path],stdin=subprocess.PIPE)
+           try:
+            for im in frames:p.stdin.write(im.convert('RGB').tobytes())
+           finally:p.stdin.close()
+           if p.wait():raise RuntimeError('FFmpeg encoder failed')
+          def overlay(im,headline,footer,progress,cta=0):
+           d=ImageDraw.Draw(im);W,H=im.size;u=W/450
+           def F(k):return font(max(10,round(k*u)))
+           def label(txt,y,size,color,anchor='mm',x=None):
+            f=F(size)
+            while d.textlength(txt,font=f)>W*.86 and f.size>10:f=font(f.size-1)
+            d.text((W/2 if x is None else x,y*H),txt,font=f,fill=color,anchor=anchor,stroke_width=max(1,round(u)),stroke_fill='#102226')
+           f=F(17);x=22*u;y=.033*H;d.text((x,y),'meanwhile',font=f,fill='#F5F5F5');d.text((x+d.textlength('meanwhile',font=f),y),'mash',font=f,fill='#C6FF00')
+           label(headline,.111,30,'#F5F5F5');label(footer,.866,22,'#C6FF00')
+           d.rounded_rectangle((W*.10,H*.925,W*.90,H*.931),radius=max(1,round(2*u)),fill='#34474D');d.rounded_rectangle((W*.10,H*.925,W*(.10+.8*max(.005,progress)),H*.931),radius=max(1,round(2*u)),fill='#C6FF00')
+           if cta>0:
+            x0=W*.18;x1=W*.82;y0=H*(.76+.045*(1-ease(cta)));y1=y0+H*.052
+            d.rounded_rectangle((x0,y0,x1,y1),radius=round(12*u),fill='#C6FF00');d.text((W/2,(y0+y1)/2),'SUBSCRIBE  •  meanwhilemash',font=F(13),fill='#101820',anchor='mm')
+           return im
+          PYCODE
+          cat > episode.py <<'PYCODE'
+          import os,math,argparse,subprocess
+          import numpy as np
+          import vtk
+          from PIL import ImageDraw
+          from engine import Studio,Audio,encode,overlay,ease,mix,V,LIME,WHITE,STEEL,DARK
+          P=argparse.ArgumentParser();P.add_argument('--duration',type=float,default=42);P.add_argument('--fps',type=int,default=24);P.add_argument('--width',type=int,default=1080);P.add_argument('--height',type=int,default=1920);P.add_argument('--out',default='out');P.add_argument('--still',action='store_true');a=P.parse_args()
+          assert 20<=a.duration<=65 and 8<=a.fps<=30 and a.width%2==0 and a.height%2==0
+          D=a.duration;scale=D/42;os.makedirs(a.out,exist_ok=True);S=Studio(a.width,a.height)
+          C=(.20,.28,.30);BROWN=(.34,.21,.105);MUD=(.46,.29,.12);GOLD=(.95,.73,.25);PIPE=(.45,.56,.57);GLASS=(.45,.70,.73);BLACK=(.10,.13,.14);GREEN=(.35,.69,.20);BLUE=(.25,.64,.80)
+          box,ell,rod=S.box,S.ell,S.rod
+
+          def platform(x,y,w,d):
+           box((x,y,-.12),(w,d,.22),C);box((x,y,.012),(w-.09,d-.09,.045),DARK)
+           for k in [-1,1]:box((x+k*(w/2-.045),y,.025),(.035,d-.08,.014),STEEL)
+          box((6,0,-.29),(34,18,.22),(.055,.12,.14))
+          for x in range(-10,23):box((x,0,-.171),(.012,18,.01),(.11,.25,.27))
+          for y in range(-9,10):box((6,y,-.171),(34,.012,.01),(.11,.25,.27))
+          for x,w in [(0,3.8),(4,3.9),(8,3.8),(12,3.8)]:platform(x,0,w,3.3)
+
+          # Original 3D cow model.
+          body=ell((.25,.15,1.32),(.83,.40,.47),WHITE);ell((.82,.15,1.31),(.37,.37,.39),WHITE)
+          for x,y,z,sx,sz in [(-.19,-.195,1.45,.30,.24),(.53,-.22,1.23,.23,.20),(.24,.48,1.48,.30,.19)]:ell((x,y,z),(sx,.065,sz),BLACK)
+          ell((1.05,.15,1.48),(.24,.26,.33),WHITE);ell((1.34,.15,1.60),(.31,.24,.27),WHITE);ell((1.57,.15,1.49),(.19,.23,.14),(.78,.64,.59))
+          for k in [-1,1]:
+           ell((1.18,.15+k*.26,1.75),(.15,.16,.07),BLACK);ell((1.45,.15+k*.225,1.67),(.038,.035,.04),BLACK);rod((1.2,.15+k*.15,1.77),(1.15,.15+k*.21,1.92),.047,WHITE)
+           ell((1.69,.15+k*.105,1.51),(.023,.03,.023),BROWN)
+          for x in [-.37,.65]:
+           for y in [-.13,.43]:
+            rod((x,y,1.12),(x,y,.34),.105,WHITE);rod((x,y,.34),(x+.018,y,.15),.088,BLACK);box((x+.065,y,.105),(.23,.19,.17),BLACK)
+          ell((-.31,.12,.91),(.26,.22,.13),(.80,.59,.56))
+          for x in [-.42,-.19]:
+           for y in [0,.23]:rod((x,y,.91),(x,y,.75),.045,(.80,.59,.56))
+          tail=S.actor('rod',WHITE);tuft=S.actor('ell',BLACK)
+
+          # Manure collection pit and pen.
+          box((-.91,.05,.04),(1.05,1.14,.07),STEEL);box((-.91,.05,.085),(.85,.92,.035),MUD)
+          for y in np.linspace(-.42,.52,9):box((-.91,y,.14),(1.04,.045,.05),STEEL)
+          for x in [-1.68,1.68]:
+           for y in [-1.18,1.18]:rod((x,y,.04),(x,y,.87),.046,PIPE)
+          for y in [-1.18,1.18]:
+           for z in [.42,.83]:rod((-1.68,y,z),(1.68,y,z),.033,PIPE)
+          fall=[ell((0,0,0),(.095,.085,.09),BROWN) for _ in range(5)]
+
+          # Translucent pipes with animated material transport.
+          def path(points,r=.12,color=PIPE,alpha=.38):
+           pts=np.array(points,float)
+           for u,v in zip(pts,pts[1:]):
+            ob=rod(u,v,r,color);ob.GetProperty().SetOpacity(alpha)
+           for p in pts[1:-1]:ell(p,(r*1.05,)*3,color).GetProperty().SetOpacity(alpha)
+           lengths=np.linalg.norm(np.diff(pts,axis=0),axis=1);cum=np.r_[0,np.cumsum(lengths)]
+           def point(f):
+            v=(f%1)*cum[-1];i=min(len(lengths)-1,int(np.searchsorted(cum[1:],v,side='right')));return mix(pts[i],pts[i+1],(v-cum[i])/lengths[i])
+           return point
+          feed=path([(-.91,.05,.18),(-.91,-.85,.18),(2.28,-.85,.18),(2.28,-.85,.62),(3.14,-.85,.62)],.14)
+          box((1.97,-.85,.37),(.43,.43,.49),STEEL);rod((1.97,-1.08,.37),(1.97,-1.28,.37),.14,DARK)
+
+          # Digester cutaway.
+          x=4;y=.05;r=1.18
+          rod((x,y,.12),(x,y,.30),r,STEEL);rod((x,y,.30),(x,y,.92),r*.96,MUD)
+          pts=vtk.vtkPoints();cells=vtk.vtkCellArray()
+          for j in range(41):
+           th=math.pi*j/40
+           for z in [.30,2.30]:pts.InsertNextPoint(x+r*math.cos(th),y+r*math.sin(th),z)
+          for j in range(40):
+           q=vtk.vtkQuad()
+           for k,idx in enumerate([2*j,2*j+1,2*j+3,2*j+2]):q.GetPointIds().SetId(k,idx)
+           cells.InsertNextCell(q)
+          poly=vtk.vtkPolyData();poly.SetPoints(pts);poly.SetPolys(cells);n=vtk.vtkPolyDataNormals();n.SetInputData(poly);n.ConsistencyOn();m=vtk.vtkPolyDataMapper();m.SetInputConnection(n.GetOutputPort());shell=vtk.vtkActor();shell.SetMapper(m);shell.GetProperty().SetColor(*STEEL);shell.GetProperty().SetAmbient(.38);S.r.AddActor(shell)
+          ell((x,y,2.30),(r,r,.40),STEEL);rod((x,y,2.62),(x,y,2.91),.17,GOLD)
+          for k in [-1,1]:rod((x+k*r,y,.34),(x+k*r,y,2.3),.042,GOLD)
+          rod((x,y,.93),(x,y,2.12),.065,STEEL);ell((x,y,2.14),(.18,.18,.14),STEEL)
+          blades=[S.actor('box',PIPE) for _ in range(3)];microbes=[ell((0,0,0),(.065,.046,.044),GOLD) for _ in range(14)];bubbles=[ell((0,0,0),(.06,)*3,LIME) for _ in range(24)]
+          gas=path([(4,.05,2.85),(4,-.05,3.03),(6.72,-.05,3.03),(6.72,-.05,1.83)],.115,GOLD,.45)
+
+          # Gas cleaning and generator machinery.
+          for xx in [6.72,7.30]:
+           rod((xx,0,.20),(xx,0,1.73),.25,STEEL);ell((xx,0,1.73),(.25,.25,.18),PIPE);rod((xx,0,1.89),(xx,0,2.04),.082,GOLD)
+           for z in [.44,1.39]:rod((xx,0,z),(xx,0,z+.055),.267,DARK)
+          path([(6.72,0,2.01),(7.30,0,2.01),(7.30,0,1.84)],.09,GOLD,.85)
+          clean=path([(7.30,0,.31),(7.30,-.70,.31),(8.08,-.70,.31),(8.08,-.70,.85)],.105,GOLD,.5)
+          box((8.35,.08,.34),(1.52,1.18,.36),STEEL);box((8.03,.02,.83),(.76,.86,.70),C);box((8.75,.02,.83),(.53,.73,.65),STEEL)
+          for xx in np.linspace(7.76,8.28,6):box((xx,-.44,.84),(.055,.08,.53),PIPE)
+          rod((8.35,0,.83),(8.65,0,.83),.075,GOLD);rod((8.75,-.45,.83),(8.75,-.58,.83),.30,DARK)
+          fan=[S.actor('box',LIME) for _ in range(4)];ell((8.75,-.62,.83),(.08,.05,.08),STEEL)
+          for xx in [7.75,8.95]:rod((xx,.41,1.17),(xx,.41,1.50),.07,STEEL)
+
+          # Electricity delivery and illuminated building.
+          wire=path([(9,.25,.83),(9.35,.25,.83),(9.35,.25,1.85),(10.45,.25,1.85),(10.45,.25,.92),(11.1,.25,.92)],.045,LIME,.82)
+          box((11.24,.30,.75),(1.36,1.25,1.40),WHITE);roof=box((11.24,.30,1.51),(1.58,1.48,.16),DARK)
+          box((11.24,-.335,.39),(.28,.045,.72),STEEL);windows=[]
+          for xx in [10.83,11.65]:windows.append(box((xx,-.35,1.02),(.32,.045,.34),STEEL))
+
+          # Residual digestate and nutrient return to crops.
+          outlet=path([(4,-.15,.49),(4,-1.36,.49),(12.5,-1.36,.49),(12.5,-1.36,.18)],.13,MUD,.45)
+          box((12.89,-.15,.09),(1.75,2.08,.16),BROWN)
+          for yy in [-.84,-.34,.16,.66]:
+           box((12.89,yy,.19),(1.65,.15,.07),MUD)
+          plants=[]
+          for xx in np.linspace(12.17,13.56,5):
+           for yy in [-.84,-.34,.16,.66]:
+            stalk=rod((xx,yy,.21),(xx,yy,.69),.022,GREEN);leaves=[ell((xx+k*.065,yy,.46+(.09 if k>0 else 0)),(.10,.045,.032),GREEN) for k in [-1,1]];plants.append((xx,yy,stalk,leaves))
+
+          streams=[]
+          for fn,num,col,sz in [(feed,17,MUD,.078),(gas,19,LIME,.061),(clean,9,LIME,.052),(wire,14,LIME,.050),(outlet,28,MUD,.07)]:streams.append((fn,[ell((0,0,0),(sz,)*3,col) for _ in range(num)]))
+          starts=[0,4.5,10,17.5,24.5,30.5,36.5,42]
+          labels=[
+           ('COW POOP → POWER?','A FARM CAN PRODUCE ELECTRICITY'),
+           ('COLLECT THE MANURE','PUMP WASTE INTO THE DIGESTER'),
+           ('INSIDE THE DIGESTER','MICROBES RELEASE BIOGAS'),
+           ('CLEAN GAS → GENERATOR','AN ENGINE DRIVES A GENERATOR'),
+           ('ELECTRICITY','POWER FOR THE FARM OR GRID'),
+           ('THE LEFTOVER DIGESTATE','NUTRIENTS CAN RETURN TO CROPS'),
+           ('WASTE → ENERGY → NUTRIENTS','CURIOSITY WITHOUT LIMITS')
+          ]
+          views=[(V(.25,0,.95),9.5,-16,3.5),(V(.68,-.30,.8),9.7,-12,3.5),(V(4.1,0,1.54),11.0,0,3.7),(V(7.78,0,1.4),10.5,-8,3.7),(V(10.45,0,1.06),9.8,0,3.4),(V(12.8,-.15,.66),8.8,5,3.8),(V(6.4,0,.85),20,-62,12)]
+
+          def render(t):
+           i=min(6,int(np.searchsorted(starts[1:],t,side='right')));p=np.clip((t-starts[i])/(starts[i+1]-starts[i]),0,1);q=ease(p)
+           end=V(-.78,.15+.19*math.sin(t*3),.74);S.segment(tail,V(-.49,.15,1.40),end,.035);tuft.SetPosition(*end);tuft.SetScale(.08,.05,.11)
+           for j,o in enumerate(fall):
+            f=(t*1.25+j*.2)%1;o.SetPosition(-.88,.05,.87-.69*f);o.SetVisibility(f<.84 and i in [0,1])
+           for j,o in enumerate(blades):
+            th=t*2.2+j*2*math.pi/3;o.SetPosition(4+.34*math.cos(th),.05+.34*math.sin(th),1.02);o.SetScale(.65,.10,.075);o.SetOrientation(0,0,math.degrees(th))
+           for j,o in enumerate(microbes):
+            th=j*2.399+t*.43;rr=.21+.60*(j%5)/4;o.SetPosition(4+rr*math.cos(th),.05+rr*math.sin(th),.96+.11*math.sin(t*3+j))
+           for j,o in enumerate(bubbles):
+            f=(t*.55+j/24)%1;th=j*2.399;o.SetPosition(4+.74*math.cos(th),.05+.74*math.sin(th),.94+f*1.30);r=.032+.052*f;o.SetScale(r,r,r);o.SetVisibility(i in [2,6])
+           for j,o in enumerate(fan):
+            th=t*12+j*math.pi/2;o.SetPosition(8.75+.13*math.cos(th),-.63,.83+.13*math.sin(th));o.SetScale(.23,.046,.057);o.SetOrientation(0,-math.degrees(th),0)
+           for j,(fn,beads) in enumerate(streams):
+            for k,o in enumerate(beads):o.SetPosition(*fn(t*(.70 if j==3 else .23)+k/len(beads)))
+           for o in windows:o.GetProperty().SetColor(*(LIME if i>=4 else STEEL));o.GetProperty().SetAmbient(.7 if i>=4 else .25)
+           for j,(xx,yy,stalk,leaves) in enumerate(plants):
+            h=.18+.34*(q if i==5 else 1 if i==6 else .35);S.segment(stalk,V(xx,yy,.21),V(xx,yy,.21+h),.022)
+            for k,o in zip([-1,1],leaves):o.SetPosition(xx+k*.06,yy,.21+h*(.5 if k<0 else .78));o.SetScale(.075+.028*q,.035,.032)
+           target,dist,az,z=views[i]
+           if i and p<.19:
+            old=views[i-1];f=ease(p/.19);target=mix(old[0],target,f);dist=mix(old[1],dist,f);az=mix(old[2]+8,az,f);z=mix(old[3],z,f)
+           th=math.radians(az+8*q);S.cam.SetPosition(target[0]+dist*math.sin(th),target[1]-dist*math.cos(th),z);S.cam.SetFocalPoint(*target);S.r.ResetCameraClippingRange()
+           im=S.frame();return overlay(im,*labels[i],min(1,t/42),min(1,p*4) if i==6 and p>.15 else 0)
+
+          if a.still:
+           for i in range(7):render((starts[i]+starts[i+1])/2).save(f'{a.out}/scene_{i+1}.png')
+          else:
+           def frames():
+            for f in range(round(D*a.fps)):
+             if f%(a.fps*4)==0:print(f'Frame {f}/{round(D*a.fps)}',flush=True)
+             yield render(f/a.fps/scale)
+           encode(frames(),a.width,a.height,a.fps,f'{a.out}/visual.mp4')
+           A=Audio(D)
+           def e(t,k,pan=0,amp=1):A.event(t*scale,k,pan,amp)
+           e(0,'hook');e(.24,'pulse',amp=.8)
+           for t in np.arange(.1344,9.8,.16):e(float(t),'step',-.3,.18)
+           for t in np.arange(4.8,10,.36):e(float(t),'lift',-.4,.55)
+           for t in np.arange(10.1,17.5,1/6.6):e(float(t),'pulse',.1,.18)
+           for t in np.arange(10.4,17.5,.95):e(float(t),'lower',amp=.35)
+           for t in np.arange(17.7,24.5,.24):e(float(t),'rep',.2,.45)
+           for t in np.arange(24.8,30.5,.38):e(float(t),'pulse',.3,.55)
+           e(25.0,'resolve');e(25.25,'chime',amp=.75)
+           for t in np.arange(30.8,36.5,.35):e(float(t),'lift',-.2,.45)
+           for t in [31.5,32.6,33.7,34.8,35.9]:e(t,'chime',amp=.45)
+           for t in starts[1:-1]:e(t,'scan',amp=.55)
+           e(37.5,'resolve');e(38,'chime',amp=.8)
+           A.save(f'{a.out}/sfx.wav')
+           subprocess.run(['ffmpeg','-v','error','-y','-i',f'{a.out}/visual.mp4','-i',f'{a.out}/sfx.wav','-c:v','copy','-c:a','aac','-b:a','192k','-shortest','-movflags','+faststart',f'{a.out}/MeanwhileMash_Cow_Poop_Power.mp4'],check=True)
+          S.close()
+          PYCODE
+      - name: Render true 3D episode
+        shell: bash
+        run: |
+          case "$QUALITY" in
+            preview) set -- --width 360 --height 640 --fps 12 ;;
+            full) set -- --width 1080 --height 1920 --fps 24 ;;
+            stills) set -- --width 450 --height 800 --still ;;
+            *) exit 1 ;;
+          esac
+          xvfb-run -a -s '-screen 0 1280x2048x24' python episode.py --duration "$DURATION" "$@"
+      - name: Upload output
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeanwhileMash-Biogas-${{ inputs.quality }}
+          path: |
+            out/MeanwhileMash_Cow_Poop_Power.mp4
+            out/scene_*.png
+          if-no-files-found: error
+          retention-days: 7

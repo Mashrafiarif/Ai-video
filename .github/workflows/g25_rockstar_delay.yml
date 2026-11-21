@@ -1,0 +1,367 @@
+
+# MeanwhileMash G25 | Level 1.2 V5 | Enhanced 2.5D
+# Original illustrations/SFX: no game footage, logos, maps, characters or music.
+# Speculation is labeled; there is no evidence of intentional profit-driven delay.
+# Sources: https://www.rockstargames.com/newswire/article/39akk424a9oo53/grand-theft-auto-vi-now-available
+# https://www.rockstargames.com/newswire?tag=vi
+name: MeanwhileMash - G25 Rockstar Delay Mystery
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Match ElevenLabs narration duration (20-60 seconds)
+        required: true
+        default: '44'
+      quality:
+        description: Rendering resolution
+        type: choice
+        options: [preview, full]
+        default: preview
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install renderer only as needed
+        run: |
+          python -m pip install --disable-pip-version-check pillow numpy
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
+          fi
+          if [ ! -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] && [ ! -f /usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y fonts-dejavu-core
+          fi
+      - name: Generate original animated video and SFX
+        env:
+          DURATION: ${{ inputs.duration }}
+          QUALITY: ${{ inputs.quality }}
+        run: |
+          cat > render.py <<'MM_RENDERER'
+          import argparse, math, subprocess, wave
+          from functools import lru_cache
+          import numpy as np
+          from PIL import Image, ImageDraw, ImageFont
+          p=argparse.ArgumentParser()
+          p.add_argument('--duration',type=float,default=44)
+          p.add_argument('--width',type=int,default=432)
+          p.add_argument('--still',type=float,default=None)
+          p.add_argument('--output',default='G25.mp4')
+          a=p.parse_args()
+          D=a.duration; W=a.width; H=W*16//9; H-=H%2; S=W/720; FPS=30; SR=48000
+          assert 20<=D<=60 and W>=300
+          L='#C6FF00'; F='#F5F5F5'; K='#101820'; M='#344550'; G='#64748B'; C='#8EABBA'; A='#E7AE65'; DULL='#16232C'; RED='#D47E73'
+          B=[0,4.5,9,14,19,24,29,35,40,45,49,54]
+          HEAD=[('13 YEARS.','ON PURPOSE?'),('IT STARTED','BACK IN 2013'),('ONE GAME','KEPT EARNING'),('THE THEORY','FOLLOW THE MONEY'),('THE MONEY MACHINE','KEPT RUNNING'),('THE SILENCE','BUILT ANTICIPATION'),('BUT HERE IS','THE OTHER SIDE'),('THE EVIDENCE','HAS A LIMIT'),('NOVEMBER 19','2026 — RELEASED'),('WAIT...','OR STRATEGY?'),('STAY CURIOUS','GET UPDATED')]
+          FOOT=['QUESTION, NOT A FACT','GTA V: SEPTEMBER 2013','GTA ONLINE / ONGOING BUSINESS','HYPOTHESIS, NOT VERIFIED','NO REVENUE TOTAL ASSUMED','ATTENTION IS NOT PROOF','LONG DEVELOPMENT IS REAL','NO EVIDENCE OF DELIBERATE DELAY','RELEASE CONFIRMED BY ROCKSTAR','THE MOTIVE IS UNKNOWN','SUBSCRIBE FOR MORE']
+          EVENTS=[(0,'impact'),(.20,'ring'),(.55,'ring'),(1.1,'ring'),(2.2,'whoosh'),(4.5,'impact'),(9,'impact'),(14,'impact'),(19,'impact'),(24,'impact'),(29,'impact'),(35,'impact'),(40,'impact'),(45,'impact'),(49,'whoosh'),(50.2,'ring'),(50.7,'whoosh'),(51.25,'click'),(52.55,'click'),(52.7,'ring')]
+          def clamp(x):return max(0,min(1,x))
+          def ease(x):x=clamp(x);return x*x*(3-2*x)
+          def at(q,off,dur):return ease((q-off)/dur)
+          def P(x,y):return round(x*S),round(y*S)
+          @lru_cache(None)
+          def ft(size):
+           for path in ['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf']:
+            try:return ImageFont.truetype(path,max(9,round(size*S)))
+            except OSError:pass
+           raise RuntimeError('No suitable system font found')
+          def tx(d,x,y,t,n=30,c=F,anchor='mm',limit=650):
+           while n>12 and ft(n).getlength(t)>limit*S:n-=1
+           d.text(P(x,y),t,font=ft(n),fill=c,anchor=anchor)
+          def rect(d,x,y,w,h,c,r=0,outline=None,sw=1):
+           d.rounded_rectangle([P(x,y),P(x+w,y+h)],radius=max(0,round(r*S)),fill=c,outline=outline,width=max(1,round(sw*S)))
+          def line(d,pts,c,w=2):d.line([P(*z) for z in pts],fill=c,width=max(1,round(w*S)),joint='curve')
+          def ell(d,x,y,rx,ry,c=None,out=None,sw=1):d.ellipse([P(x-rx,y-ry),P(x+rx,y+ry)],fill=c,outline=out,width=max(1,round(sw*S)))
+          def poly(d,pts,c):d.polygon([P(*z) for z in pts],fill=c)
+          def cuboid(d,x,y,w,h,dep,c='#526B79',top='#9AAEB4',side='#2D424D'):
+           # x,y is bottom-left; the object has real isometric-looking top and side faces
+           poly(d,[(x,y-h),(x+dep,y-h-dep*.38),(x+w+dep,y-h-dep*.38),(x+w,y-h)],top)
+           poly(d,[(x+w,y-h),(x+w+dep,y-h-dep*.38),(x+w+dep,y-dep*.38),(x+w,y)],side)
+           rect(d,x,y-h,w,h,c,3)
+           line(d,[(x,y-h),(x+w,y-h),(x+w+dep,y-h-dep*.38)],'#B8C5C8',1)
+          def glow(d,x,y,r,col=L):
+           for j in range(4,0,-1):ell(d,x,y,r*j*.56,r*j*.56,None,col,1)
+          def signal(d,pts,phase,col=L):
+           line(d,pts,'#3D5860',3)
+           lens=[math.dist(u,v) for u,v in zip(pts,pts[1:])]; target=clamp(phase)*sum(lens)
+           for j,ll in enumerate(lens):
+            if target<=ll or j==len(lens)-1:
+             f=clamp(target/ll);ax,ay=pts[j];bx,by=pts[j+1];ell(d,ax+(bx-ax)*f,ay+(by-ay)*f,5,5,col);break
+            target-=ll
+          def skyline(d,q,ground=875):
+           # Perspective layers and subtle parallax, no external art or gameplay
+           for layer in [0,1,2]:
+            step=49 if layer==0 else 65 if layer==1 else 92
+            shift=(q*7*(layer+1))%step
+            col=['#22313C','#2C4250','#3E5260'][layer]
+            bottom=750+layer*55
+            for j in range(-2,14):
+             x=j*step-shift;h=88+((j*47+layer*29)%175)
+             rect(d,x,bottom-h,step-7,h,col,2)
+             if layer>0:
+              for v in range(3):
+               for k in range(2):
+                if (j*3+v+2*k)%4!=0:rect(d,x+10+k*17,bottom-h+15+v*25,5,8,'#6A7C73')
+           line(d,[(0,ground),(720,ground)],'#71828A',2)
+           for j in range(-7,8):line(d,[(360+j*28,ground),(360+j*150,1130)],'#2A414B',1)
+           for yy in [900,943,1002,1090]:line(d,[(0,yy),(720,yy)],'#2C444D',1)
+          def paper(d,x,y,w,h,title,value,angle=0):
+           # offset shadow and clipped document card, original faux-investigation design
+           rect(d,x+9,y+12,w,h,'#0D161C',9)
+           rect(d,x,y,w,h,'#E2E6DC',8)
+           rect(d,x+14,y+16,w-28,7,'#ACBAB8',3)
+           tx(d,x+w/2,y+45,title,17,K,limit=w-15)
+           tx(d,x+w/2,y+h*.69,value,30,'#324C53',limit=w-14)
+          def banner(d,text,fill=A):
+           rect(d,76,278,568,45,'#2B3334',12);tx(d,360,302,text,19,fill)
+          y,x=np.ogrid[:H,:W];rad=np.sqrt(((x/W-.48)*1.35)**2+((y/H-.55)*1.0)**2)
+          grad=np.clip(1-rad*1.5,0,1)**1.3
+          back=Image.fromarray(np.uint8(np.array([12,19,25])+grad[:,:,None]*np.array([18,29,34])),'RGB')
+          del x,y,grad,rad
+
+          def draw(t):
+           i=next((k for k in range(len(B)-1) if t<B[k+1]),len(B)-2);q=t-B[i];im=back.copy();d=ImageDraw.Draw(im)
+           if i==0:
+            skyline(d,q,855)
+            # huge evidence vault with number wheels and opening neon slit
+            rect(d,113,366,494,360,'#0A1318',23,'#72828A',2)
+            rect(d,129,382,462,327,'#1A303A',18)
+            for j in range(13):
+             xx=144+j*33;rect(d,xx,649-105*at(q,j*.105,.4),17,55+105*at(q,j*.105,.4),'#39535B',3)
+            tx(d,360,459,'13',116,L);tx(d,360,552,'YEARS',56,F)
+            rect(d,150,610,420,8,'#42616C',3);rect(d,150,610,420*at(q,.4,2),8,L,3)
+            glow(d,360,774,33)
+            tx(d,360,984,'WHO BENEFITED FROM THE WAIT?',26,F)
+           elif i==1:
+            skyline(d,q,950)
+            # physical 'V' and 'VI' cases bridged by an actual 13-marker timeline
+            cuboid(d,115,782,157,260,23,'#536773','#91A8AC','#344A56')
+            tx(d,193,647,'V',98,L)
+            cuboid(d,449,782,157,260,23,'#52715E','#91AD82','#2E5147')
+            tx(d,526,647,'VI',94,L)
+            f=at(q,.55,2.7);line(d,[(190,847),(530,847)],'#647784',5);line(d,[(190,847),(190+340*f,847)],L,5)
+            for j in range(14):
+             xx=190+j*340/13
+             ell(d,xx,847,5.5,5.5,L if j/13<=f else '#80929A')
+            y=2013+int(13*at(q,.55,2.7))
+            tx(d,360,944,str(y),47,L)
+            tx(d,193,1030,'2013',22,F);tx(d,526,1030,'2026',22,F)
+           elif i==2:
+            # dimensional GTA Online recurring-revenue machine
+            skyline(d,q,990);cuboid(d,184,924,360,465,52,'#3C5663','#79939B','#253C46')
+            rect(d,209,481,310,225,'#102027',18,'#8298A2',2)
+            tx(d,364,540,'ONLINE',43,L)
+            for j in range(5):
+             xx=234+j*55;rect(d,xx,590,32,80,'#2B464F',5)
+             if j<round(5*at(q,.2,1.8)):rect(d,xx+7,604,18,53,L,2)
+            rect(d,260,745,208,19,'#0B151C',7)
+            for j in range(5):
+             f=at(q,.45+j*.65,.45)
+             if f:
+              yy=771+j*40-28*f
+              cuboid(d,264,yy+29,203,30,14,'#748B43','#D6E290','#48622B')
+              tx(d,366,yy+13,'$$   $$   $$',16,F)
+            tx(d,360,1038,'RECURRING BUSINESS MODEL',22,C)
+           elif i==3:
+            # mystery wall: file cards and moving red thread
+            rect(d,38,355,644,558,'#584B40',20,'#8C7865',2)
+            for j in range(8):line(d,[(50,400+j*69),(670,400+j*69)],'#625347',2)
+            cards=[(67,424,'GTA ONLINE','REVENUE'),(394,413,'GTA VI','LONG WAIT'),(212,694,'THEORY','PROFIT MOTIVE')]
+            for j,(x,y,cap,body) in enumerate(cards):
+             f=at(q,.2+j*.9,.5)
+             if f:paper(d,x,y-(1-f)*38,255,173,cap,body)
+            p=[(194,578),(522,569),(337,706),(194,578)]
+            for j in range(3):
+             f=at(q,1+j*.72,.44)
+             if f:line(d,[p[j],(p[j][0]+(p[j+1][0]-p[j][0])*f,p[j][1]+(p[j+1][1]-p[j][1])*f)],'#E88E78',3)
+            banner(d,'SPECULATION • NOT EVIDENCE',RED)
+           elif i==4:
+            skyline(d,q,1000)
+            # Two cash conveyor belts roll continuously, each arrival linked to SFX
+            cuboid(d,95,874,537,177,43,'#3B4D56','#73858E','#263942')
+            rect(d,105,842,516,28,'#16272C',9)
+            for j in range(9):
+             x=110+((j*74+q*75)%510);ell(d,x,856,8,8,'#607E87')
+            for j in range(6):
+             f=at(q,.30+j*.70,.38)
+             if f:
+              x=111+(j*74+q*56)%470;w=55
+              cuboid(d,x,828,w,35+24*f,12,'#91A84A','#D7E690','#526C2C')
+              tx(d,x+w*.5,802-17*f,'$',20,'#14281D')
+            tx(d,360,960,'STEADY BUSINESS',26,L)
+            tx(d,360,1018,'NOT PROOF OF A DELAY',19,F)
+           elif i==5:
+            skyline(d,q,970)
+            # falling calendar pages, linked to the years counter
+            f=at(q,.25,3.3);year=2013+int(13*f)
+            cuboid(d,196,822,335,365,26,'#455969','#8DA0A3','#283D49')
+            rect(d,219,480,287,317,'#E1E4DA',8)
+            rect(d,219,480,287,69,'#A2B6AC',8)
+            tx(d,362,515,'YEAR',28,K)
+            tx(d,362,659,str(year),83,K)
+            for j in range(3):
+             k=at(q,1.4+j*.75,.42)
+             if k:
+              poly(d,[(487,776),(487-110*k,776-20*k),(487-113*k,730-32*k),(487,725)],'#BAC8BF')
+            tx(d,360,921,'SILENCE MADE ROOM',26,F)
+            tx(d,360,970,'FOR SPECULATION',27,L)
+           elif i==6:
+            # workbench + modular city construction (original, no game asset)
+            skyline(d,q,965)
+            cuboid(d,76,916,574,117,35,'#5C6970','#96A6A6','#344753')
+            # wireframe building blocks progressively assembled by animated crane
+            for j in range(6):
+             h=[102,170,129,225,150,190][j];xx=121+j*77;f=at(q,.3+j*.72,.7)
+             if f:
+              cuboid(d,xx,785,58,h*f,19,'#435D67','#78939D','#2A4755')
+              for k in range(3):
+               if h*f>40+k*31:rect(d,xx+10,785-h*f+18+k*31,11,10,'#A0B5B7',2)
+            # A drafting-arm indicator measuring progress
+            f=at(q,.2,4.5);line(d,[(360,333),(360+170*f,333)],L,5)
+            rect(d,360+170*f,320,24,28,A,5)
+            tx(d,360,997,'COMPLEX DEVELOPMENT',25,L)
+           elif i==7:
+            # documentary evidence scale balanced by a clear no-proof conclusion
+            poly(d,[(360,401),(393,453),(327,453)],'#91A3AB')
+            rect(d,346,450,28,370,'#748B96',8)
+            line(d,[(165,530),(555,530)],'#91A3AB',10)
+            for j,(x,label,body) in enumerate([(188,'KNOWN','LONG DEVELOPMENT'),(532,'UNKNOWN','INTENT')]):
+             f=at(q,.25+j*1,.75)
+             ell(d,x,755,155,14,'#0D1820')
+             line(d,[(x,530),(x,645)],'#9DB0B5',4)
+             rect(d,x-120,648,240*f,124,'#273E47',13)
+             if f>.6:tx(d,x,686,label,23,L if j==0 else A);tx(d,x,727,body,15,F,limit=210)
+            tx(d,360,889,'NO PROOF OF INTENTIONAL DELAY',22,RED)
+           elif i==8:
+            skyline(d,q,995)
+            # rising blackout doors and 2026 reveal: confirmed launch
+            y0=435;f=at(q,.45,1.9)
+            cuboid(d,110,900,504,490*(1-f)+18,35,'#3E5664','#88A1A9','#253D49')
+            tx(d,360,521,'NOV 19',62,L)
+            tx(d,360,630,'2026',112,F)
+            for j in range(7):
+             ell(d,160+j*65,850-250*at(q,.65+j*.2,1.7),6,6,L)
+            tx(d,360,1015,'OFFICIAL RELEASE DATE',25,L)
+           elif i==9:
+            # two dimensional sculpted weights on an unbalanced motive scale
+            skyline(d,q,965)
+            ell(d,360,610,218,218,'#1F3038','#6B8990',2)
+            for j in range(4):ell(d,360,610,73+j*43,73+j*43,None,'#37545C',1)
+            tx(d,360,575,'?',150,L)
+            tx(d,360,743,'MOTIVE UNKNOWN',25,F)
+            banner(d,'THE THEORY IS STILL A THEORY',RED)
+            tx(d,360,1012,'ANTICIPATION HAS REAL VALUE',22,L)
+           else:
+            # Seamless transition of mystery ring into clean CTA without a hard cut
+            u=q
+            r=220+24*math.sin(min(1,u/1.4)*math.pi)
+            ell(d,360,590,r,r,None,L,2)
+            ell(d,360,590,r*.82,r*.82,None,'#45616B',2)
+            tx(d,360,357,'THE STORY CONTINUES',29,F)
+            shift=20*(1-at(u,0,.9))
+            px=360-(ft(43).getlength('meanwhile')+ft(43).getlength('mash'))/(2*S)
+            tx(d,px,548+shift,'meanwhile',43,F,'lm')
+            tx(d,px+ft(43).getlength('meanwhile')/S,548+shift,'mash',43,L,'lm')
+            f=at(u,1.0,.65);w=max(2,396*f);y=668+24*(1-f)
+            rect(d,360-w/2,y,w,76,'#638000',38)
+            rect(d,360-w/2,y-5,w,76,L,38)
+            if f>.57:tx(d,360,y+32,'SUBSCRIBE',34,K,limit=w-20)
+            if u>=3.5:
+             j=at(u,3.5,.85);ell(d,360,y+34,210+35*j,42+22*j,None,L,2)
+            tx(d,360,849,'TO GET UPDATED',25,F)
+            tx(d,360,979,'CURIOSITY WITHOUT LIMITS',18,C)
+           # Shared minimal editorial frame -- never covers the story's important objects
+           rect(d,28,25,664,66,'#101A21',16)
+           tx(d,45,59,'meanwhile',24,F,'lm');tx(d,45+ft(24).getlength('meanwhile')/S,59,'mash',24,L,'lm')
+           tx(d,669,59,'GAMING / G25',15,C,'rm')
+           if i<10:
+            rect(d,30,119,660,139,'#101A21',13)
+            tx(d,360,169,HEAD[i][0],39,F)
+            tx(d,360,222,HEAD[i][1],38,L)
+            rect(d,32,1120,656,93,'#101A21',12)
+            tx(d,360,1150,FOOT[i],18,C)
+           else:tx(d,360,1128,'SUBSCRIBE TO MEANWHILE MASH',18,C)
+           rect(d,43,1228,634,4,'#354D56',2)
+           rect(d,43,1228,634*clamp(t/54),4,L,2)
+           if i==10:im=Image.blend(draw(B[10]-.001),im,at(q,0,1.05))
+           return im
+
+          def sfx():
+           rng=np.random.default_rng(225);mix=np.zeros((round(D*SR),2),dtype=np.float32)
+           def cue(ref,kind='tick',span=.1,amp=.1,pan=0):
+            center=math.ceil((ref*D/54)*FPS-1e-7)/FPS
+            start=round(center*SR);n=max(2,round(span*SR));t=np.arange(n)/SR;u=t/(n/SR)
+            b=rng.normal(0,1,n);f=np.fft.rfftfreq(n,1/SR);ftt=np.fft.rfft(b);ftt*=np.minimum(1,(f/250)**2)*np.minimum(1,(5000/np.maximum(f,1))**3);noise=np.fft.irfft(ftt,n);noise/=max(1e-9,np.max(abs(noise)))
+            if kind=='impact':v=(.72*np.sin(2*np.pi*(90*t-100*t*t))+.28*noise)*np.exp(-t*17)
+            elif kind=='whoosh':v=noise*np.sin(np.pi*u)**2
+            elif kind=='cash':v=(.34*np.sin(2*np.pi*510*t)+.66*noise)*np.exp(-t*29)
+            elif kind=='ring':v=(.7*np.sin(2*np.pi*(650*t+280*t*t))+.3*noise)*np.exp(-t*12)
+            elif kind=='click':v=(.5*np.sin(2*np.pi*1100*t)+.5*noise)*np.exp(-t*42)
+            else:v=(.6*np.sin(2*np.pi*1300*t)+.4*noise)*np.exp(-t*52)
+            fade=min(96,n//2);v[:fade]*=np.linspace(0,1,fade);v[-fade:]*=np.linspace(1,0,fade)
+            use=min(n,len(mix)-start)
+            if use>0:mix[start:start+use]+=amp*v[:use,None]*np.sqrt([1-pan,1+pan])
+           for at0,kind in EVENTS:cue(at0,kind, .44 if kind=='whoosh' else .3 if kind=='impact' else .23,.13)
+           # audible events coincide with the eased calendar changes, visual object arrivals and rings
+           def _inverse(v):
+            lo=0.;hi=1.
+            for _ in range(28):
+             mid=(lo+hi)*.5
+             if ease(mid)<v:lo=mid
+             else:hi=mid
+            return (lo+hi)*.5
+           for start,offset,dur in [(4.5,.55,2.7),(24,.25,3.3)]:
+            for j in range(1,14):cue(start+offset+dur*_inverse(j/13),'tick',.055,.072,(-1)**j*.17)
+           for j in range(5):cue(9+.45+j*.65+.45,'cash',.16,.12,(j-2)*.16)
+           for j in range(3):cue(14+.2+j*.9+.5,'cash',.16,.12,(j-1)*.23)
+           for j in range(3):cue(14+1+j*.72+.44,'ring',.23,.092)
+           for j in range(6):cue(19+.30+j*.70+.38,'cash',.17,.11,(-1)**j*.18)
+           for j in range(6):cue(29+.3+j*.72+.7,'cash',.20,.11,(-1)**j*.2)
+           for j in range(7):cue(40+.65+j*.20+1.7,'ring',.14,.06)
+           peak=float(np.max(np.abs(mix)));limit=10**(-9/20)
+           if peak>limit:mix*=limit/peak
+           with wave.open('G25_SFX.wav','wb') as w:
+            w.setnchannels(2);w.setsampwidth(2);w.setframerate(SR)
+            w.writeframes(np.int16(np.clip(mix,-1,1)*32767).tobytes())
+           print('WAV peak dBFS:',round(20*math.log10(max(float(np.max(np.abs(mix))),1e-10)),1))
+          if __name__=='__main__':
+           if a.still is not None:
+            draw(a.still*54/D).save(a.output)
+           else:
+            sfx()
+            cmd=['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pixel_format','rgb24','-video_size',f'{W}x{H}','-framerate','30','-i','-','-i','G25_SFX.wav','-map','0:v:0','-map','1:a:0','-c:v','libx264','-preset','veryfast','-crf','21','-pix_fmt','yuv420p','-c:a','aac','-b:a','160k','-ar','48000','-shortest','-movflags','+faststart',a.output]
+            with subprocess.Popen(cmd,stdin=subprocess.PIPE) as process:
+             for k in range(round(D*FPS)):
+              process.stdin.write(draw(k/FPS*54/D).tobytes())
+              if k%(FPS*9)==0:print('Rendered',k//FPS,'/',D,flush=True)
+             process.stdin.close()
+             if process.wait()!=0:raise RuntimeError('ffmpeg failed')
+          MM_RENDERER
+          python -m py_compile render.py
+          if [ "$QUALITY" = preview ]; then WIDTH=432; else WIDTH=1080; fi
+          python render.py --duration "$DURATION" --width "$WIDTH" --output G25.mp4
+          ffprobe -v error -show_entries stream=codec_name,width,height,avg_frame_rate,sample_rate,channels -of default=noprint_wrappers=1 G25.mp4
+          cat > G25_Production_Notes.txt <<'MM_NOTES'
+          G25 — Did Rockstar Delay GTA 6 On Purpose?
+          A hypothetical question, not an accusation or confirmed finding.
+          2013: GTA V release. 2026-11-19: GTA VI release, confirmed by Rockstar.
+          GTA Online recurring revenue is real. No evidence profit caused intentional delays.
+          All scenes and action-synced stereo SFX are original and procedural.
+          The file contains SFX but no spoken narration; add ElevenLabs in an editor.
+          Time-scale is estimated until the actual audio is supplied.
+          MM_NOTES
+      - name: Export MP4, SFX WAV and source notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanwhilemash-g25-delay-mystery
+          path: |
+            G25.mp4
+            G25_SFX.wav
+            G25_Production_Notes.txt
+          retention-days: 7

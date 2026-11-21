@@ -1,5 +1,5 @@
 
-name: MeanwhileMash - Coin Validator True 3D V1
+name: MeanwhileMash - Coin Validator True 3D V2 (Xvfb Fix)
 
 on:
   workflow_dispatch:
@@ -7,14 +7,10 @@ on:
       quality:
         description: Choose render quality
         type: choice
-        options:
-          - stills
-          - motion_test
-          - preview
-          - full
+        options: [stills, motion_test, preview, full]
         default: motion_test
       duration_sec:
-        description: Video duration without narration
+        description: Video duration (seconds)
         type: string
         default: '50'
 
@@ -27,37 +23,78 @@ jobs:
 
     env:
       LIBGL_ALWAYS_SOFTWARE: '1'
-      VTK_DEFAULT_OPENGL_WINDOW: vtkEGLRenderWindow
+      VTK_DEFAULT_OPENGL_WINDOW: vtkXOpenGLRenderWindow
       LP_NUM_THREADS: '2'
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '1'
+      PYTHONUNBUFFERED: '1'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Cache Python downloads
+      - name: Cache Python packages
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: coin-vtk962-python311-v1
+          key: coin-vtk962-python311-v2
 
-      - name: Install renderer
+      - name: Install software graphics renderer
+        shell: bash
         run: |
-          python -m pip install --disable-pip-version-check \
-            vtk==9.6.2 "numpy>=1.26,<3" \
-            "pillow>=10,<13" imageio-ffmpeg==0.6.0
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libgl1 libglx-mesa0 \
+            libgl1-mesa-dri fonts-dejavu-core
 
-      - name: Create True 3D animation
+          python -m pip install --disable-pip-version-check \
+            vtk==9.6.2 \
+            "numpy>=1.26,<3" \
+            "pillow>=10,<13" \
+            imageio-ffmpeg==0.6.0
+
+      - name: Verify VTK graphics
+        shell: bash
+        run: |
+          xvfb-run -a -s '-screen 0 1280x2160x24 +extension GLX +render -noreset' python - <<'PY'
+          import vtk
+          ren = vtk.vtkRenderer()
+          win = vtk.vtkRenderWindow()
+          win.AddRenderer(ren)
+          win.SetOffScreenRendering(1)
+          win.SetSize(32,32)
+          print("Renderer:", win.GetClassName())
+          src = vtk.vtkSphereSource()
+          mapper = vtk.vtkPolyDataMapper()
+          mapper.SetInputConnection(src.GetOutputPort())
+          actor = vtk.vtkActor()
+          actor.SetMapper(mapper)
+          ren.AddActor(actor)
+          ren.ResetCamera()
+          win.Render()
+          win.Finalize()
+          print("VTK graphics test PASSED")
+          PY
+
+      - name: Create 3D coin validator engine
         shell: bash
         run: |
           cat > coin_true3d.py <<'PYTHON'
-          import os, math, subprocess, wave, argparse
+          import os
+          import math
+          import wave
+          import argparse
+          import subprocess
+          from pathlib import Path
+
           import numpy as np
           import vtk
           from vtk.util.numpy_support import vtk_to_numpy
@@ -66,12 +103,21 @@ jobs:
 
           WHITE=(.96,.97,.97)
           LIME=(.776,1.,0.)
-          CYAN=(.06,.8,.94)
+          CYAN=(.06,.80,.94)
           RED=(1.,.31,.32)
           AMBER=(1.,.62,.18)
           STEEL=(.52,.67,.70)
           COPPER=(.73,.34,.15)
           DARK=(.065,.125,.155)
+
+          SECTIONS=[
+              (0,7,"THE COIN TEST","REAL OR FAKE?"),
+              (7,17,"THE LIGHT CHECK","COIN SIZE"),
+              (17,27,"METAL DETECTOR","HIDDEN COILS"),
+              (27,36,"SIGNATURE TEST","MATCH OR REJECT"),
+              (36,43,"THE GATE DECIDES","TWO PATHS"),
+              (43,50,"ENGINEERING SECRET","HIDDEN TECHNOLOGY")
+          ]
 
           def ease(t):
               t=max(0,min(1,t))
@@ -84,15 +130,19 @@ jobs:
               for i,p in enumerate(points):
                   pts.InsertNextPoint(*p)
                   line.GetPointIds().SetId(i,i)
+
               cells=vtk.vtkCellArray()
               cells.InsertNextCell(line)
               data=vtk.vtkPolyData()
               data.SetPoints(pts)
               data.SetLines(cells)
+
               filt=vtk.vtkTubeFilter()
               filt.SetInputData(data)
               filt.SetRadius(radius)
               filt.SetNumberOfSides(10)
+              filt.CappingOn()
+
               mapper=vtk.vtkPolyDataMapper()
               mapper.SetInputConnection(filt.GetOutputPort())
               actor=vtk.vtkActor()
@@ -108,22 +158,42 @@ jobs:
                   self.ren.GradientBackgroundOn()
                   self.ren.SetBackground(.02,.055,.075)
                   self.ren.SetBackground2(.06,.125,.16)
+
                   self.win=vtk.vtkRenderWindow()
                   self.win.SetOffScreenRendering(1)
                   self.win.SetMultiSamples(0)
                   self.win.SetSize(w,h)
                   self.win.AddRenderer(self.ren)
+
                   self.cam=self.ren.GetActiveCamera()
                   self.cam.SetViewUp(0,0,1)
+
                   self.cap=vtk.vtkWindowToImageFilter()
                   self.cap.SetInput(self.win)
                   self.cap.ReadFrontBufferOff()
-                  for pos in [(-3,-5,8),(4,-2,5),(0,3,6)]:
+
+                  for pos in [
+                      (-3,-5,8),(4,-2,5),(0,3,6)
+                  ]:
                       light=vtk.vtkLight()
                       light.SetPosition(*pos)
                       light.SetFocalPoint(0,0,2)
                       self.ren.AddLight(light)
-                  self.objects=[]
+
+                  self.track=[
+                      (-1.05,3.0),(-.64,2.76),
+                      (-.21,2.44),(.28,2.06),
+                      (.77,1.68)
+                  ]
+                  self.accept=[
+                      (.77,1.68),(.98,1.3),
+                      (1.23,.74)
+                  ]
+                  self.reject=[
+                      (.77,1.68),(.30,1.22),
+                      (-.75,.72)
+                  ]
+
                   self.build()
 
               def shape(self,kind,pos,scale,color):
@@ -132,12 +202,15 @@ jobs:
                   else:
                       src=vtk.vtkCylinderSource()
                       src.SetResolution(40)
+
                   mapper=vtk.vtkPolyDataMapper()
                   mapper.SetInputConnection(src.GetOutputPort())
+
                   actor=vtk.vtkActor()
                   actor.SetMapper(mapper)
                   actor.SetPosition(*pos)
                   actor.SetScale(*scale)
+
                   prop=actor.GetProperty()
                   prop.SetColor(*color)
                   prop.SetAmbient(.2)
@@ -146,26 +219,30 @@ jobs:
                   self.ren.AddActor(actor)
                   return actor
 
-              def box(self,p,s,c):
-                  return self.shape("box",p,s,c)
+              def box(self,pos,scale,color):
+                  return self.shape("box",pos,scale,color)
 
               def build(self):
-                  self.box((0,.5,1.8),(3.5,.15,3.8),DARK)
-                  self.box((-1.7,0,1.8),(.12,.7,3.8),STEEL)
-                  self.box((1.7,0,1.8),(.12,.7,3.8),STEEL)
-                  self.box((0,.2,3.7),(3.5,.6,.12),STEEL)
-                  self.box((0,.2,0),(3.5,.6,.12),STEEL)
-
-                  self.track=[
-                      (-1.05,3.0),(-.64,2.76),
-                      (-.21,2.44),(.28,2.06),(.77,1.68)
-                  ]
-                  self.accept=[
-                      (.77,1.68),(.98,1.3),(1.23,.74)
-                  ]
-                  self.reject=[
-                      (.77,1.68),(.30,1.22),(-.75,.72)
-                  ]
+                  self.box(
+                      (0,.5,1.8),
+                      (3.5,.15,3.8),DARK
+                  )
+                  self.box(
+                      (-1.7,0,1.8),
+                      (.12,.7,3.8),STEEL
+                  )
+                  self.box(
+                      (1.7,0,1.8),
+                      (.12,.7,3.8),STEEL
+                  )
+                  self.box(
+                      (0,.2,3.7),
+                      (3.5,.6,.12),STEEL
+                  )
+                  self.box(
+                      (0,.2,0),
+                      (3.5,.6,.12),STEEL
+                  )
 
                   for path,color in [
                       (self.track,STEEL),
@@ -173,19 +250,30 @@ jobs:
                       (self.reject,RED)
                   ]:
                       for y in [-.2,.15]:
-                          tube(self.ren,
+                          tube(
+                              self.ren,
                               [(x,y,z) for x,z in path],
-                              .045,color)
+                              .045,color
+                          )
 
                   for y in [-.5,.3]:
-                      self.box((-.45,y,2.6),(.36,.12,.36),CYAN)
+                      self.box(
+                          (-.45,y,2.6),
+                          (.36,.12,.36),CYAN
+                      )
 
-                  self.beam=tube(self.ren,
-                      [(-.45,-.5,2.6),(-.45,.3,2.6)],
-                      .018,CYAN)
+                  self.beam=tube(
+                      self.ren,
+                      [(-.45,-.5,2.6),
+                       (-.45,.3,2.6)],
+                      .018,CYAN
+                  )
 
                   for y in [-.45,.35]:
-                      self.box((.21,y,2.15),(.95,.08,.95),COPPER)
+                      self.box(
+                          (.21,y,2.15),
+                          (.95,.08,.95),COPPER
+                      )
 
                   for j in range(3):
                       radius=.36-j*.065
@@ -198,37 +286,59 @@ jobs:
                                   y,
                                   2.15+radius*math.sin(a)
                               ))
-                          tube(self.ren,points,.022,COPPER)
+                          tube(
+                              self.ren,points,
+                              .022,COPPER
+                          )
 
                   self.gate=self.box(
-                      (.73,-.05,1.29),(.10,.35,.56),AMBER)
+                      (.73,-.05,1.29),
+                      (.10,.35,.56),AMBER
+                  )
 
                   self.coin=self.shape(
-                      "cylinder",(0,-.10,3.0),
-                      (.34,.115,.34),STEEL)
-
+                      "cylinder",
+                      (0,-.10,3.0),
+                      (.34,.115,.34),STEEL
+                  )
                   self.fake=self.shape(
-                      "cylinder",(0,-.10,3.0),
-                      (.34,.115,.34),(.68,.38,.25))
+                      "cylinder",
+                      (0,-.10,3.0),
+                      (.34,.115,.34),
+                      (.68,.38,.25)
+                  )
 
-                  self.box((1.23,-.08,.43),
-                           (.7,.52,.27),(.1,.31,.2))
-                  self.box((-.8,-.08,.43),
-                           (.82,.52,.27),(.43,.15,.16))
+                  self.box(
+                      (1.23,-.08,.43),
+                      (.7,.52,.27),
+                      (.1,.31,.2)
+                  )
+                  self.box(
+                      (-.8,-.08,.43),
+                      (.82,.52,.27),
+                      (.43,.15,.16)
+                  )
 
               def path(self,points,u):
                   u=max(0,min(1,u))*(len(points)-1)
                   i=min(len(points)-2,int(u))
                   f=ease(u-i)
-                  x=points[i][0]+(points[i+1][0]-points[i][0])*f
-                  z=points[i][1]+(points[i+1][1]-points[i][1])*f
+                  x=points[i][0]+(
+                      points[i+1][0]-points[i][0]
+                  )*f
+                  z=points[i][1]+(
+                      points[i+1][1]-points[i][1]
+                  )*f
                   return x,z
 
               def update(self,t):
                   sections=[0,7,17,27,36,43,50]
                   idx=next(
                       (i for i in range(6)
-                       if sections[i]<=t<sections[i+1]),5)
+                       if sections[i]<=t<sections[i+1]),
+                      5
+                  )
+
                   start,end=sections[idx:idx+2]
                   u=max(0,min(1,(t-start)/(end-start)))
 
@@ -237,24 +347,37 @@ jobs:
 
                   if idx==0:
                       obj=self.fake
-                      path=self.track if u<.42 else self.reject
-                      progress=u/.42 if u<.42 else (u-.42)/.58
+                      if u<.42:
+                          path=self.track
+                          progress=u/.42
+                      else:
+                          path=self.reject
+                          progress=(u-.42)/.58
+
                   elif idx==1:
                       obj=self.coin
                       path=self.track
                       progress=.45*u
+
                   elif idx==2:
                       obj=self.coin
                       path=self.track
                       progress=.47+.42*u
+
                   elif idx==3:
                       obj=self.coin
                       path=self.track
                       progress=.83
+
                   elif idx==4:
-                      obj=self.fake if u<.5 else self.coin
-                      path=self.reject if u<.5 else self.accept
+                      if u<.5:
+                          obj=self.fake
+                          path=self.reject
+                      else:
+                          obj=self.coin
+                          path=self.accept
                       progress=(u*2)%1
+
                   else:
                       obj=self.coin
                       path=self.accept
@@ -266,9 +389,11 @@ jobs:
                   obj.SetVisibility(1)
 
                   self.gate.SetOrientation(
-                      0,0,-20 if idx==4 and u<.5 else 20)
+                      0,0,
+                      -20 if idx==4 and u<.5 else 20
+                  )
 
-                  cam_positions=[
+                  camera=[
                       (3.6,-7.3,4.7),
                       (2.65,-5.,4.18),
                       (3.15,-4.75,3.9),
@@ -276,16 +401,24 @@ jobs:
                       (4.15,-6.55,3.65),
                       (4.2,-7.5,4.67)
                   ]
+
                   targets=[
-                      (0,0,1.8),(-.45,0,2.6),
-                      (.12,0,2.1),(.05,0,2.08),
-                      (.35,0,1.24),(.08,0,1.78)
+                      (0,0,1.8),
+                      (-.45,0,2.6),
+                      (.12,0,2.1),
+                      (.05,0,2.08),
+                      (.35,0,1.24),
+                      (.08,0,1.78)
                   ]
-                  self.cam.SetPosition(*cam_positions[idx])
+
+                  self.cam.SetPosition(*camera[idx])
                   self.cam.SetFocalPoint(*targets[idx])
                   self.cam.SetViewAngle(31)
+
                   self.ren.ResetCameraClippingRange()
-                  self.beam.SetVisibility(idx in (1,2,3))
+                  self.beam.SetVisibility(
+                      idx in (1,2,3)
+                  )
                   return idx,u
 
               def render(self):
@@ -294,100 +427,153 @@ jobs:
                   self.cap.Update()
                   image=self.cap.GetOutput()
                   pixels=vtk_to_numpy(
-                      image.GetPointData().GetScalars())
+                      image.GetPointData().GetScalars()
+                  )
                   pixels=pixels.reshape(
-                      self.h,self.w,-1)[:,:,:3]
+                      self.h,self.w,-1
+                  )[:,:,:3]
                   return Image.fromarray(
-                      np.flipud(pixels).copy(),"RGB")
+                      np.flipud(pixels).copy(),"RGB"
+                  )
 
-          TITLES=[
-              ("THE COIN TEST","REAL OR FAKE?"),
-              ("THE LIGHT CHECK","COIN SIZE"),
-              ("METAL DETECTOR","HIDDEN COILS"),
-              ("SIGNATURE TEST","MATCH OR REJECT"),
-              ("THE GATE DECIDES","TWO DIFFERENT PATHS"),
-              ("ENGINEERING SECRET","HIDING IN PLAIN SIGHT")
-          ]
+          def font(size):
+              path=(
+                  "/usr/share/fonts/truetype/"
+                  "dejavu/DejaVuSans-Bold.ttf"
+              )
+              try:
+                  return ImageFont.truetype(path,size)
+              except:
+                  return ImageFont.load_default()
 
           def overlay(image,t,idx,u):
               w,h=image.size
               d=ImageDraw.Draw(image)
-              try:
-                  font="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-                  small=ImageFont.truetype(font,int(w*.05))
-                  large=ImageFont.truetype(font,int(w*.060))
-              except:
-                  small=ImageFont.load_default()
-                  large=small
 
+              small=font(int(w*.05))
+              large=font(int(w*.06))
               x=int(w*.055)
-              d.text((x,int(h*.034)),"meanwhile",
-                     fill="white",font=small)
-              width=d.textlength("meanwhile",font=small)
-              d.text((x+width,int(h*.034)),"mash",
-                     fill="#C6FF00",font=small)
 
-              a,b=TITLES[idx]
-              d.text((x,int(h*.106)),a,
-                     fill="white",font=large)
-              d.text((x,int(h*.15)),b,
-                     fill="#C6FF00",font=small)
+              d.text(
+                  (x,int(h*.034)),
+                  "meanwhile",
+                  fill="white",font=small
+              )
+
+              width=d.textlength(
+                  "meanwhile",font=small
+              )
+
+              d.text(
+                  (x+width,int(h*.034)),
+                  "mash",
+                  fill="#C6FF00",font=small
+              )
+
+              titles=[
+                  ("THE COIN TEST","REAL OR FAKE?"),
+                  ("THE LIGHT CHECK","COIN SIZE"),
+                  ("METAL DETECTOR","HIDDEN COILS"),
+                  ("SIGNATURE TEST","MATCH OR REJECT"),
+                  ("THE GATE DECIDES","TWO PATHS"),
+                  ("ENGINEERING SECRET","HIDDEN TECHNOLOGY")
+              ]
+
+              a,b=titles[idx]
+              d.text(
+                  (x,int(h*.106)),a,
+                  fill="white",font=large
+              )
+              d.text(
+                  (x,int(h*.15)),b,
+                  fill="#C6FF00",font=small
+              )
 
               if idx==4:
                   label="RETURN" if u<.5 else "ACCEPT"
-                  color="#FF6666" if u<.5 else "#C6FF00"
-                  d.text((x,int(h*.79)),label,
-                         fill=color,font=large)
+                  color=(
+                      "#FF6666" if u<.5
+                      else "#C6FF00"
+                  )
+                  d.text(
+                      (x,int(h*.79)),
+                      label,fill=color,font=large
+                  )
 
               if idx==5 and u>.5:
                   d.rounded_rectangle(
-                      (int(.17*w),int(.76*h),
-                       int(.83*w),int(.82*h)),
-                      radius=12,fill="#C6FF00")
-                  d.text((int(.29*w),int(.772*h)),
-                         "SUBSCRIBE",fill="#0B1018",
-                         font=small)
+                      (
+                          int(.17*w),int(.76*h),
+                          int(.83*w),int(.82*h)
+                      ),
+                      radius=12,fill="#C6FF00"
+                  )
+                  d.text(
+                      (int(.29*w),int(.772*h)),
+                      "SUBSCRIBE",
+                      fill="#0B1018",font=small
+                  )
               return image
 
           def soundfx(filename,duration):
               sr=48000
-              audio=np.zeros((int((duration+.2)*sr),2),
-                             dtype=np.float32)
+              audio=np.zeros(
+                  (int((duration+.2)*sr),2),
+                  dtype=np.float32
+              )
+
               events=[
-                  (.5,300),(3,230),(7.2,800),
-                  (12.5,780),(17.4,390),
-                  (22.6,490),(27.8,670),
-                  (35.4,330),(36.4,250),
-                  (40.6,310),(41.8,900),(47.1,1050)
+                  (.5,300),(3,230),
+                  (7.2,800),(12.5,780),
+                  (17.4,390),(22.6,490),
+                  (27.8,670),(35.4,330),
+                  (36.4,250),(40.6,310),
+                  (41.8,900),(47.1,1050)
               ]
+
               for original,freq in events:
                   at=original*duration/50
                   n=int(.25*sr)
                   tt=np.arange(n)/sr
-                  wave0=np.sin(2*np.pi*freq*tt)
-                  wave0*=np.exp(-tt*12)*.08
+
+                  tone=np.sin(
+                      2*np.pi*freq*tt
+                  )
+                  tone*=np.exp(-tt*12)*.08
+
                   start=int(at*sr)
-                  end=min(start+n,len(audio))
+                  end=min(
+                      start+n,len(audio)
+                  )
+
                   if end>start:
-                      audio[start:end,0]+=wave0[:end-start]
-                      audio[start:end,1]+=wave0[:end-start]
+                      audio[start:end,0]+=tone[:end-start]
+                      audio[start:end,1]+=tone[:end-start]
+
               audio=np.clip(audio,-.4,.4)
               with wave.open(filename,"wb") as wf:
                   wf.setnchannels(2)
                   wf.setsampwidth(2)
                   wf.setframerate(sr)
                   wf.writeframes(
-                      (audio*32767).astype("<i2").tobytes())
+                      (audio*32767).astype(
+                          "<i2"
+                      ).tobytes()
+                  )
 
           def main():
               ap=argparse.ArgumentParser()
-              ap.add_argument("--mode",default="preview")
-              ap.add_argument("--duration",type=float,default=50)
+              ap.add_argument(
+                  "--mode",default="preview"
+              )
+              ap.add_argument(
+                  "--duration",type=float,
+                  default=50
+              )
               args=ap.parse_args()
-
               os.makedirs("output",exist_ok=True)
-              mode=args.mode
 
+              mode=args.mode
               if mode=="stills":
                   w,h,fps=540,960,1
               elif mode=="full":
@@ -395,42 +581,70 @@ jobs:
               else:
                   w,h,fps=360,640,12
 
-              duration=7.5 if mode=="motion_test" else args.duration
+              duration=(
+                  7.5 if mode=="motion_test"
+                  else args.duration
+              )
               duration=max(1,duration)
 
               studio=Studio(w,h)
+
               if mode=="stills":
-                  for i,t in enumerate([3.8,12,22,31,40.9,46]):
+                  for i,t in enumerate(
+                      [3.8,12,22,31,40.9,46]
+                  ):
                       idx,u=studio.update(t)
-                      image=overlay(studio.render(),t,idx,u)
-                      image.save(f"output/scene_{i+1:02}.png")
+                      image=overlay(
+                          studio.render(),t,idx,u
+                      )
+                      image.save(
+                          f"output/scene_{i+1:02}.png"
+                      )
                   studio.win.Finalize()
                   return
 
               ff=imageio_ffmpeg.get_ffmpeg_exe()
               raw="output/visual.mp4"
+
               cmd=[
                   ff,"-y","-loglevel","error",
-                  "-f","rawvideo","-pix_fmt","rgb24",
-                  "-s",f"{w}x{h}","-r",str(fps),
-                  "-i","-","-an",
-                  "-c:v","libx264",
+                  "-f","rawvideo",
+                  "-pix_fmt","rgb24",
+                  "-s",f"{w}x{h}",
+                  "-r",str(fps),
+                  "-i","-",
+                  "-an","-c:v","libx264",
                   "-preset","veryfast",
                   "-crf","20",
-                  "-pix_fmt","yuv420p",raw
+                  "-pix_fmt","yuv420p",
+                  raw
               ]
-              proc=subprocess.Popen(cmd,stdin=subprocess.PIPE)
+
+              proc=subprocess.Popen(
+                  cmd,stdin=subprocess.PIPE
+              )
               total=math.ceil(duration*fps)
+
               for f in range(total):
                   t=f/fps*50/duration
                   idx,u=studio.update(t)
-                  image=overlay(studio.render(),t,idx,u)
+                  image=overlay(
+                      studio.render(),t,idx,u
+                  )
                   proc.stdin.write(image.tobytes())
+
                   if f%(fps*5)==0:
-                      print("Rendered",f,"/",total,flush=True)
+                      print(
+                          "Rendered",f,"/",total,
+                          flush=True
+                      )
+
               proc.stdin.close()
               if proc.wait()!=0:
-                  raise RuntimeError("Video encoding failed")
+                  raise RuntimeError(
+                      "Video encoding failed"
+                  )
+
               studio.win.Finalize()
 
               sfx="output/original_sfx.wav"
@@ -446,41 +660,63 @@ jobs:
                       break
 
               final="output/coin_validator.mp4"
-              mux=[ff,"-y","-loglevel","error","-i",raw]
+              mux=[
+                  ff,"-y","-loglevel","error",
+                  "-i",raw
+              ]
 
               if voice:
-                  mux.extend(["-i",voice,"-i",sfx])
+                  mux.extend(
+                      ["-i",voice,"-i",sfx]
+                  )
                   mux.extend([
                       "-filter_complex",
                       "[1:a]volume=1[v];"
                       "[2:a]volume=0.35[s];"
-                      "[v][s]amix=inputs=2:duration=first[a]",
-                      "-map","0:v:0","-map","[a]"
+                      "[v][s]amix="
+                      "inputs=2:duration=first[a]",
+                      "-map","0:v:0",
+                      "-map","[a]"
                   ])
               else:
                   mux.extend(["-i",sfx])
-                  mux.extend(["-map","0:v:0","-map","1:a:0"])
+                  mux.extend([
+                      "-map","0:v:0",
+                      "-map","1:a:0"
+                  ])
 
               mux.extend([
-                  "-c:v","copy","-c:a","aac",
-                  "-ar","48000","-b:a","192k",
-                  "-shortest","-movflags","+faststart",final
+                  "-c:v","copy",
+                  "-c:a","aac",
+                  "-ar","48000",
+                  "-b:a","192k",
+                  "-shortest",
+                  "-movflags","+faststart",
+                  final
               ])
-              subprocess.run(mux,check=True)
-              print("Created",final,flush=True)
+
+              subprocess.run(
+                  mux,check=True
+              )
+              print(
+                  "Created",final,flush=True
+              )
 
           if __name__=="__main__":
               main()
           PYTHON
 
-      - name: Render episode
+      - name: Run True 3D render with Xvfb
         shell: bash
         run: |
-          python coin_true3d.py \
+          set -euo pipefail
+
+          xvfb-run -a -s '-screen 0 1280x2160x24 +extension GLX +render -noreset' \
+            python coin_true3d.py \
             --mode '${{ inputs.quality }}' \
             --duration '${{ inputs.duration_sec }}'
 
-      - name: Upload video and previews
+      - name: Upload completed render
         uses: actions/upload-artifact@v4
         with:
           name: MeanwhileMash-Coin-Validator-${{ inputs.quality }}

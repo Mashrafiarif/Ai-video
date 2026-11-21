@@ -1,10 +1,9 @@
 
-# MeanwhileMash G25 | Level 1.2 V5 | Enhanced 2.5D
+# MeanwhileMash G25 | Level 1.2 V5 | Sunset Palette | FIXED 1080p
 # Original illustrations/SFX: no game footage, logos, maps, characters or music.
+# Fix: explicit full-width (H,W,3) sunset background before in-place glow and vignette.
 # Speculation is labeled; there is no evidence of intentional profit-driven delay.
-# Sources: https://www.rockstargames.com/newswire/article/39akk424a9oo53/grand-theft-auto-vi-now-available
-# https://www.rockstargames.com/newswire?tag=vi
-name: MeanwhileMash - G25 Rockstar Delay Mystery
+name: MeanwhileMash - G25 Rockstar Delay Mystery Sunset
 on:
   workflow_dispatch:
     inputs:
@@ -15,7 +14,9 @@ on:
       quality:
         description: Rendering resolution
         type: choice
-        options: [preview, full]
+        options:
+          - preview
+          - full
         default: preview
 permissions:
   contents: read
@@ -56,7 +57,7 @@ jobs:
           a=p.parse_args()
           D=a.duration; W=a.width; H=W*16//9; H-=H%2; S=W/720; FPS=30; SR=48000
           assert 20<=D<=60 and W>=300
-          L='#C6FF00'; F='#F5F5F5'; K='#101820'; M='#344550'; G='#64748B'; C='#8EABBA'; A='#E7AE65'; DULL='#16232C'; RED='#D47E73'
+          L='#C6FF00'; F='#F5F5F5'; K='#101820'; M='#344550'; G='#64748B'; C='#57C7FF'; A='#FFB166'; DULL='#16232C'; RED='#FF9C86'; PNK='#FF5EA5'; PUR='#7B4DDA'; NAVY='#131629'; ORN='#FFB166'
           B=[0,4.5,9,14,19,24,29,35,40,45,49,54]
           HEAD=[('13 YEARS.','ON PURPOSE?'),('IT STARTED','BACK IN 2013'),('ONE GAME','KEPT EARNING'),('THE THEORY','FOLLOW THE MONEY'),('THE MONEY MACHINE','KEPT RUNNING'),('THE SILENCE','BUILT ANTICIPATION'),('BUT HERE IS','THE OTHER SIDE'),('THE EVIDENCE','HAS A LIMIT'),('NOVEMBER 19','2026 — RELEASED'),('WAIT...','OR STRATEGY?'),('STAY CURIOUS','GET UPDATED')]
           FOOT=['QUESTION, NOT A FACT','GTA V: SEPTEMBER 2013','GTA ONLINE / ONGOING BUSINESS','HYPOTHESIS, NOT VERIFIED','NO REVENUE TOTAL ASSUMED','ATTENTION IS NOT PROOF','LONG DEVELOPMENT IS REAL','NO EVIDENCE OF DELIBERATE DELAY','RELEASE CONFIRMED BY ROCKSTAR','THE MOTIVE IS UNKNOWN','SUBSCRIBE FOR MORE']
@@ -80,7 +81,6 @@ jobs:
           def ell(d,x,y,rx,ry,c=None,out=None,sw=1):d.ellipse([P(x-rx,y-ry),P(x+rx,y+ry)],fill=c,outline=out,width=max(1,round(sw*S)))
           def poly(d,pts,c):d.polygon([P(*z) for z in pts],fill=c)
           def cuboid(d,x,y,w,h,dep,c='#526B79',top='#9AAEB4',side='#2D424D'):
-           # x,y is bottom-left; the object has real isometric-looking top and side faces
            poly(d,[(x,y-h),(x+dep,y-h-dep*.38),(x+w+dep,y-h-dep*.38),(x+w,y-h)],top)
            poly(d,[(x+w,y-h),(x+w+dep,y-h-dep*.38),(x+w+dep,y-dep*.38),(x+w,y)],side)
            rect(d,x,y-h,w,h,c,3)
@@ -88,18 +88,17 @@ jobs:
           def glow(d,x,y,r,col=L):
            for j in range(4,0,-1):ell(d,x,y,r*j*.56,r*j*.56,None,col,1)
           def signal(d,pts,phase,col=L):
-           line(d,pts,'#3D5860',3)
+           line(d,pts,'#80598C',3)
            lens=[math.dist(u,v) for u,v in zip(pts,pts[1:])]; target=clamp(phase)*sum(lens)
            for j,ll in enumerate(lens):
             if target<=ll or j==len(lens)-1:
              f=clamp(target/ll);ax,ay=pts[j];bx,by=pts[j+1];ell(d,ax+(bx-ax)*f,ay+(by-ay)*f,5,5,col);break
             target-=ll
           def skyline(d,q,ground=875):
-           # Perspective layers and subtle parallax, no external art or gameplay
            for layer in [0,1,2]:
             step=49 if layer==0 else 65 if layer==1 else 92
             shift=(q*7*(layer+1))%step
-            col=['#22313C','#2C4250','#3E5260'][layer]
+            col=['#24213F','#37254D','#49345A'][layer]
             bottom=750+layer*55
             for j in range(-2,14):
              x=j*step-shift;h=88+((j*47+layer*29)%175)
@@ -107,12 +106,15 @@ jobs:
              if layer>0:
               for v in range(3):
                for k in range(2):
-                if (j*3+v+2*k)%4!=0:rect(d,x+10+k*17,bottom-h+15+v*25,5,8,'#6A7C73')
-           line(d,[(0,ground),(720,ground)],'#71828A',2)
-           for j in range(-7,8):line(d,[(360+j*28,ground),(360+j*150,1130)],'#2A414B',1)
-           for yy in [900,943,1002,1090]:line(d,[(0,yy),(720,yy)],'#2C444D',1)
+                if (j*3+v+2*k)%4!=0:rect(d,x+10+k*17,bottom-h+15+v*25,5,8,'#FFC47F')
+           ell(d,577,343,112,112,'#E8A069')
+           ell(d,577,343,90,90,'#FFB166')
+           for ring in (130,161):ell(d,577,343,ring,ring,None,'#DF83AD',1)
+           for strip in range(3):line(d,[(0,875+strip*12),(720,875+strip*12)],'#9E679D',1)
+           line(d,[(0,ground),(720,ground)],'#A477A3',2)
+           for j in range(-7,8):line(d,[(360+j*28,ground),(360+j*150,1130)],'#50365F',1)
+           for yy in [900,943,1002,1090]:line(d,[(0,yy),(720,yy)],'#513C65',1)
           def paper(d,x,y,w,h,title,value,angle=0):
-           # offset shadow and clipped document card, original faux-investigation design
            rect(d,x+9,y+12,w,h,'#0D161C',9)
            rect(d,x,y,w,h,'#E2E6DC',8)
            rect(d,x+14,y+16,w-28,7,'#ACBAB8',3)
@@ -120,58 +122,63 @@ jobs:
            tx(d,x+w/2,y+h*.69,value,30,'#324C53',limit=w-14)
           def banner(d,text,fill=A):
            rect(d,76,278,568,45,'#2B3334',12);tx(d,360,302,text,19,fill)
-          y,x=np.ogrid[:H,:W];rad=np.sqrt(((x/W-.48)*1.35)**2+((y/H-.55)*1.0)**2)
-          grad=np.clip(1-rad*1.5,0,1)**1.3
-          back=Image.fromarray(np.uint8(np.array([12,19,25])+grad[:,:,None]*np.array([18,29,34])),'RGB')
-          del x,y,grad,rad
+          # Fixed: create the entire H x W x 3 sunset background
+          # before applying full-width light and vignette effects.
+          yi=np.arange(H,dtype=np.float32)[:,None]/H
+          xi=np.arange(W,dtype=np.float32)[None,:]/W
+          stops=[(0.0,(16,15,43)),(.32,(60,35,112)),(.57,(139,61,139)),(.76,(226,92,129)),(1.0,(31,24,67))]
+          vals=np.stack([np.interp(yi[:,0],[u for u,_ in stops],[rgb[k] for _,rgb in stops]) for k in range(3)],axis=-1)
+          backarr=np.broadcast_to(vals[:,None,:],(H,W,3)).copy()
+          sunlight=np.exp(-(((xi-.78)/.26)**2+((yi-.38)/.19)**2)*2.0)
+          backarr+=sunlight[:,:,None]*np.array([39,18,-12],dtype=np.float32)
+          vign=(np.clip(1-np.sqrt(((xi-.5)*.95)**2+((yi-.51)*.70)**2),.0,1.))
+          backarr*=((.65+.35*vign)[:,:,None])
+          back=Image.fromarray(np.uint8(np.clip(backarr,0,255)),'RGB')
+          del xi,yi,vals,backarr
 
           def draw(t):
            i=next((k for k in range(len(B)-1) if t<B[k+1]),len(B)-2);q=t-B[i];im=back.copy();d=ImageDraw.Draw(im)
            if i==0:
             skyline(d,q,855)
-            # huge evidence vault with number wheels and opening neon slit
-            rect(d,113,366,494,360,'#0A1318',23,'#72828A',2)
-            rect(d,129,382,462,327,'#1A303A',18)
+            rect(d,113,366,494,360,'#14152A',23,'#CF77AC',2)
+            rect(d,129,382,462,327,'#33234A',18)
             for j in range(13):
-             xx=144+j*33;rect(d,xx,649-105*at(q,j*.105,.4),17,55+105*at(q,j*.105,.4),'#39535B',3)
-            tx(d,360,459,'13',116,L);tx(d,360,552,'YEARS',56,F)
-            rect(d,150,610,420,8,'#42616C',3);rect(d,150,610,420*at(q,.4,2),8,L,3)
+             xx=144+j*33;rect(d,xx,649-105*at(q,j*.105,.4),17,55+105*at(q,j*.105,.4),'#725186',3)
+            tx(d,360,459,'13',116,ORN);tx(d,360,552,'YEARS',56,F)
+            rect(d,150,610,420,8,'#89589F',3);rect(d,150,610,420*at(q,.4,2),8,ORN,3)
             glow(d,360,774,33)
             tx(d,360,984,'WHO BENEFITED FROM THE WAIT?',26,F)
            elif i==1:
             skyline(d,q,950)
-            # physical 'V' and 'VI' cases bridged by an actual 13-marker timeline
-            cuboid(d,115,782,157,260,23,'#536773','#91A8AC','#344A56')
-            tx(d,193,647,'V',98,L)
-            cuboid(d,449,782,157,260,23,'#52715E','#91AD82','#2E5147')
-            tx(d,526,647,'VI',94,L)
-            f=at(q,.55,2.7);line(d,[(190,847),(530,847)],'#647784',5);line(d,[(190,847),(190+340*f,847)],L,5)
+            cuboid(d,115,782,157,260,23,'#644C87','#D6A2B8','#352648')
+            tx(d,193,647,'V',98,ORN)
+            cuboid(d,449,782,157,260,23,'#79478E','#EFA9A1','#332654')
+            tx(d,526,647,'VI',94,ORN)
+            f=at(q,.55,2.7);line(d,[(190,847),(530,847)],'#946EAA',5);line(d,[(190,847),(190+340*f,847)],ORN,5)
             for j in range(14):
              xx=190+j*340/13
-             ell(d,xx,847,5.5,5.5,L if j/13<=f else '#80929A')
+             ell(d,xx,847,5.5,5.5,ORN if j/13<=f else '#9673A2')
             y=2013+int(13*at(q,.55,2.7))
-            tx(d,360,944,str(y),47,L)
+            tx(d,360,944,str(y),47,ORN)
             tx(d,193,1030,'2013',22,F);tx(d,526,1030,'2026',22,F)
            elif i==2:
-            # dimensional GTA Online recurring-revenue machine
-            skyline(d,q,990);cuboid(d,184,924,360,465,52,'#3C5663','#79939B','#253C46')
-            rect(d,209,481,310,225,'#102027',18,'#8298A2',2)
-            tx(d,364,540,'ONLINE',43,L)
+            skyline(d,q,990);cuboid(d,184,924,360,465,52,'#6B468F','#DBA1BC','#3B2751')
+            rect(d,209,481,310,225,'#1B1735',18,'#B87FA7',2)
+            tx(d,364,540,'ONLINE',43,PNK)
             for j in range(5):
-             xx=234+j*55;rect(d,xx,590,32,80,'#2B464F',5)
-             if j<round(5*at(q,.2,1.8)):rect(d,xx+7,604,18,53,L,2)
-            rect(d,260,745,208,19,'#0B151C',7)
+             xx=234+j*55;rect(d,xx,590,32,80,'#503461',5)
+             if j<round(5*at(q,.2,1.8)):rect(d,xx+7,604,18,53,ORN,2)
+            rect(d,260,745,208,19,'#1B1730',7)
             for j in range(5):
              f=at(q,.45+j*.65,.45)
              if f:
               yy=771+j*40-28*f
-              cuboid(d,264,yy+29,203,30,14,'#748B43','#D6E290','#48622B')
+              cuboid(d,264,yy+29,203,30,14,'#CA7C96','#FFB985','#844D79')
               tx(d,366,yy+13,'$$   $$   $$',16,F)
             tx(d,360,1038,'RECURRING BUSINESS MODEL',22,C)
            elif i==3:
-            # mystery wall: file cards and moving red thread
-            rect(d,38,355,644,558,'#584B40',20,'#8C7865',2)
-            for j in range(8):line(d,[(50,400+j*69),(670,400+j*69)],'#625347',2)
+            rect(d,38,355,644,558,'#3F284D',20,'#AE6A96',2)
+            for j in range(8):line(d,[(50,400+j*69),(670,400+j*69)],'#6F4266',2)
             cards=[(67,424,'GTA ONLINE','REVENUE'),(394,413,'GTA VI','LONG WAIT'),(212,694,'THEORY','PROFIT MOTIVE')]
             for j,(x,y,cap,body) in enumerate(cards):
              f=at(q,.2+j*.9,.5)
@@ -179,116 +186,107 @@ jobs:
             p=[(194,578),(522,569),(337,706),(194,578)]
             for j in range(3):
              f=at(q,1+j*.72,.44)
-             if f:line(d,[p[j],(p[j][0]+(p[j+1][0]-p[j][0])*f,p[j][1]+(p[j+1][1]-p[j][1])*f)],'#E88E78',3)
+             if f:line(d,[p[j],(p[j][0]+(p[j+1][0]-p[j][0])*f,p[j][1]+(p[j+1][1]-p[j][1])*f)],'#FF5EA5',3)
             banner(d,'SPECULATION • NOT EVIDENCE',RED)
            elif i==4:
             skyline(d,q,1000)
-            # Two cash conveyor belts roll continuously, each arrival linked to SFX
-            cuboid(d,95,874,537,177,43,'#3B4D56','#73858E','#263942')
-            rect(d,105,842,516,28,'#16272C',9)
+            cuboid(d,95,874,537,177,43,'#6F467A','#C784B4','#392541')
+            rect(d,105,842,516,28,'#292242',9)
             for j in range(9):
-             x=110+((j*74+q*75)%510);ell(d,x,856,8,8,'#607E87')
+             x=110+((j*74+q*75)%510);ell(d,x,856,8,8,'#C886B6')
             for j in range(6):
              f=at(q,.30+j*.70,.38)
              if f:
               x=111+(j*74+q*56)%470;w=55
-              cuboid(d,x,828,w,35+24*f,12,'#91A84A','#D7E690','#526C2C')
-              tx(d,x+w*.5,802-17*f,'$',20,'#14281D')
-            tx(d,360,960,'STEADY BUSINESS',26,L)
+              cuboid(d,x,828,w,35+24*f,12,'#CD7A96','#FFBE8B','#7E4C84')
+              tx(d,x+w*.5,802-17*f,'$' ,20,'#371D38')
+            tx(d,360,960,'STEADY BUSINESS',26,PNK)
             tx(d,360,1018,'NOT PROOF OF A DELAY',19,F)
            elif i==5:
             skyline(d,q,970)
-            # falling calendar pages, linked to the years counter
             f=at(q,.25,3.3);year=2013+int(13*f)
-            cuboid(d,196,822,335,365,26,'#455969','#8DA0A3','#283D49')
-            rect(d,219,480,287,317,'#E1E4DA',8)
-            rect(d,219,480,287,69,'#A2B6AC',8)
+            cuboid(d,196,822,335,365,26,'#6C478A','#D9A1C1','#37244C')
+            rect(d,219,480,287,317,'#F0D9CF',8)
+            rect(d,219,480,287,69,'#EB9EB2',8)
             tx(d,362,515,'YEAR',28,K)
             tx(d,362,659,str(year),83,K)
             for j in range(3):
              k=at(q,1.4+j*.75,.42)
              if k:
-              poly(d,[(487,776),(487-110*k,776-20*k),(487-113*k,730-32*k),(487,725)],'#BAC8BF')
+              poly(d,[(487,776),(487-110*k,776-20*k),(487-113*k,730-32*k),(487,725)],'#E7ADC6')
             tx(d,360,921,'SILENCE MADE ROOM',26,F)
-            tx(d,360,970,'FOR SPECULATION',27,L)
+            tx(d,360,970,'FOR SPECULATION',27,PNK)
            elif i==6:
-            # workbench + modular city construction (original, no game asset)
             skyline(d,q,965)
-            cuboid(d,76,916,574,117,35,'#5C6970','#96A6A6','#344753')
-            # wireframe building blocks progressively assembled by animated crane
+            cuboid(d,76,916,574,117,35,'#78508D','#C998BC','#35224F')
             for j in range(6):
              h=[102,170,129,225,150,190][j];xx=121+j*77;f=at(q,.3+j*.72,.7)
              if f:
-              cuboid(d,xx,785,58,h*f,19,'#435D67','#78939D','#2A4755')
+              cuboid(d,xx,785,58,h*f,19,'#67458A','#C187B5','#3A2D62')
               for k in range(3):
-               if h*f>40+k*31:rect(d,xx+10,785-h*f+18+k*31,11,10,'#A0B5B7',2)
-            # A drafting-arm indicator measuring progress
-            f=at(q,.2,4.5);line(d,[(360,333),(360+170*f,333)],L,5)
+               if h*f>40+k*31:rect(d,xx+10,785-h*f+18+k*31,11,10,'#FFC892',2)
+            f=at(q,.2,4.5);line(d,[(360,333),(360+170*f,333)],ORN,5)
             rect(d,360+170*f,320,24,28,A,5)
-            tx(d,360,997,'COMPLEX DEVELOPMENT',25,L)
+            tx(d,360,997,'COMPLEX DEVELOPMENT',25,PNK)
            elif i==7:
-            # documentary evidence scale balanced by a clear no-proof conclusion
-            poly(d,[(360,401),(393,453),(327,453)],'#91A3AB')
-            rect(d,346,450,28,370,'#748B96',8)
-            line(d,[(165,530),(555,530)],'#91A3AB',10)
+            poly(d,[(360,401),(393,453),(327,453)],'#B985BB')
+            rect(d,346,450,28,370,'#76528E',8)
+            line(d,[(165,530),(555,530)],'#B985BB',10)
             for j,(x,label,body) in enumerate([(188,'KNOWN','LONG DEVELOPMENT'),(532,'UNKNOWN','INTENT')]):
              f=at(q,.25+j*1,.75)
-             ell(d,x,755,155,14,'#0D1820')
-             line(d,[(x,530),(x,645)],'#9DB0B5',4)
-             rect(d,x-120,648,240*f,124,'#273E47',13)
-             if f>.6:tx(d,x,686,label,23,L if j==0 else A);tx(d,x,727,body,15,F,limit=210)
+             ell(d,x,755,155,14,'#160E24')
+             line(d,[(x,530),(x,645)],'#B994C2',4)
+             rect(d,x-120,648,240*f,124,'#49315F',13)
+             if f>.6:tx(d,x,686,label,23,ORN if j==0 else A);tx(d,x,727,body,15,F,limit=210)
             tx(d,360,889,'NO PROOF OF INTENTIONAL DELAY',22,RED)
            elif i==8:
             skyline(d,q,995)
-            # rising blackout doors and 2026 reveal: confirmed launch
-            y0=435;f=at(q,.45,1.9)
-            cuboid(d,110,900,504,490*(1-f)+18,35,'#3E5664','#88A1A9','#253D49')
-            tx(d,360,521,'NOV 19',62,L)
+            f=at(q,.45,1.9)
+            cuboid(d,110,900,504,490*(1-f)+18,35,'#79478E','#DCA2BA','#253D49')
+            tx(d,360,521,'NOV 19',62,ORN)
             tx(d,360,630,'2026',112,F)
             for j in range(7):
-             ell(d,160+j*65,850-250*at(q,.65+j*.2,1.7),6,6,L)
-            tx(d,360,1015,'OFFICIAL RELEASE DATE',25,L)
+             ell(d,160+j*65,850-250*at(q,.65+j*.2,1.7),6,6,ORN)
+            tx(d,360,1015,'OFFICIAL RELEASE DATE',25,ORN)
            elif i==9:
-            # two dimensional sculpted weights on an unbalanced motive scale
             skyline(d,q,965)
-            ell(d,360,610,218,218,'#1F3038','#6B8990',2)
-            for j in range(4):ell(d,360,610,73+j*43,73+j*43,None,'#37545C',1)
-            tx(d,360,575,'?',150,L)
+            ell(d,360,610,218,218,'#342447','#B879AE',2)
+            for j in range(4):ell(d,360,610,73+j*43,73+j*43,None,'#79578D',1)
+            tx(d,360,575,'?',150,ORN)
             tx(d,360,743,'MOTIVE UNKNOWN',25,F)
             banner(d,'THE THEORY IS STILL A THEORY',RED)
-            tx(d,360,1012,'ANTICIPATION HAS REAL VALUE',22,L)
+            tx(d,360,1012,'ANTICIPATION HAS REAL VALUE',22,ORN)
            else:
-            # Seamless transition of mystery ring into clean CTA without a hard cut
+            rect(d,0,0,720,1280,'#151629')
             u=q
             r=220+24*math.sin(min(1,u/1.4)*math.pi)
             ell(d,360,590,r,r,None,L,2)
-            ell(d,360,590,r*.82,r*.82,None,'#45616B',2)
+            ell(d,360,590,r*.82,r*.82,None,'#7D5E91',2)
             tx(d,360,357,'THE STORY CONTINUES',29,F)
             shift=20*(1-at(u,0,.9))
             px=360-(ft(43).getlength('meanwhile')+ft(43).getlength('mash'))/(2*S)
             tx(d,px,548+shift,'meanwhile',43,F,'lm')
             tx(d,px+ft(43).getlength('meanwhile')/S,548+shift,'mash',43,L,'lm')
             f=at(u,1.0,.65);w=max(2,396*f);y=668+24*(1-f)
-            rect(d,360-w/2,y,w,76,'#638000',38)
+            rect(d,360-w/2,y,w,76,'#628000',38)
             rect(d,360-w/2,y-5,w,76,L,38)
             if f>.57:tx(d,360,y+32,'SUBSCRIBE',34,K,limit=w-20)
             if u>=3.5:
              j=at(u,3.5,.85);ell(d,360,y+34,210+35*j,42+22*j,None,L,2)
             tx(d,360,849,'TO GET UPDATED',25,F)
             tx(d,360,979,'CURIOSITY WITHOUT LIMITS',18,C)
-           # Shared minimal editorial frame -- never covers the story's important objects
-           rect(d,28,25,664,66,'#101A21',16)
+           rect(d,28,25,664,66,'#1B1734',16)
            tx(d,45,59,'meanwhile',24,F,'lm');tx(d,45+ft(24).getlength('meanwhile')/S,59,'mash',24,L,'lm')
            tx(d,669,59,'GAMING / G25',15,C,'rm')
            if i<10:
-            rect(d,30,119,660,139,'#101A21',13)
+            rect(d,30,119,660,139,'#1B1734',13)
             tx(d,360,169,HEAD[i][0],39,F)
-            tx(d,360,222,HEAD[i][1],38,L)
-            rect(d,32,1120,656,93,'#101A21',12)
+            tx(d,360,222,HEAD[i][1],38,ORN)
+            rect(d,32,1120,656,93,'#1B1734',12)
             tx(d,360,1150,FOOT[i],18,C)
            else:tx(d,360,1128,'SUBSCRIBE TO MEANWHILE MASH',18,C)
-           rect(d,43,1228,634,4,'#354D56',2)
-           rect(d,43,1228,634*clamp(t/54),4,L,2)
+           rect(d,43,1228,634,4,'#81548D',2)
+           rect(d,43,1228,634*clamp(t/54),4,PNK,2)
            if i==10:im=Image.blend(draw(B[10]-.001),im,at(q,0,1.05))
            return im
 
@@ -308,7 +306,6 @@ jobs:
             use=min(n,len(mix)-start)
             if use>0:mix[start:start+use]+=amp*v[:use,None]*np.sqrt([1-pan,1+pan])
            for at0,kind in EVENTS:cue(at0,kind, .44 if kind=='whoosh' else .3 if kind=='impact' else .23,.13)
-           # audible events coincide with the eased calendar changes, visual object arrivals and rings
            def _inverse(v):
             lo=0.;hi=1.
             for _ in range(28):
@@ -350,16 +347,18 @@ jobs:
           cat > G25_Production_Notes.txt <<'MM_NOTES'
           G25 — Did Rockstar Delay GTA 6 On Purpose?
           A hypothetical question, not an accusation or confirmed finding.
-          2013: GTA V release. 2026-11-19: GTA VI release, confirmed by Rockstar.
-          GTA Online recurring revenue is real. No evidence profit caused intentional delays.
-          All scenes and action-synced stereo SFX are original and procedural.
-          The file contains SFX but no spoken narration; add ElevenLabs in an editor.
-          Time-scale is estimated until the actual audio is supplied.
+          GTA V release: September 2013.
+          GTA VI release: November 19, 2026.
+          No evidence that GTA Online revenue caused intentional delays.
+          Original GTA VI-inspired sunset colors and MeanwhileMash branding.
+          Visuals and stereo sound effects are original and procedural.
+          The MP4 contains SFX but no spoken narration.
+          Align ElevenLabs narration in CapCut.
           MM_NOTES
       - name: Export MP4, SFX WAV and source notes
         uses: actions/upload-artifact@v4
         with:
-          name: meanwhilemash-g25-delay-mystery
+          name: meanwhilemash-g25-gta-sunset
           path: |
             G25.mp4
             G25_SFX.wav

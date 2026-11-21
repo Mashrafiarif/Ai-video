@@ -1,0 +1,401 @@
+
+# MeanwhileMash G26 | Enhanced 2.5D Level 1.2 V5
+# GTA VI-inspired original graphics; no copied Rockstar assets.
+# Dacity Coin is a fictional trailer label. Trading/cashout are unconfirmed.
+# Optional voice: commit your ElevenLabs recording as audio/G26_voice.mp3
+# Without that file, the exported video contains original SFX only.
+name: MeanwhileMash - G26 Crypto Mystery
+'on':
+  workflow_dispatch:
+    inputs:
+      quality:
+        description: Render resolution
+        type: choice
+        options:
+          - preview
+          - full
+        default: preview
+      duration:
+        description: Seconds used when no ElevenLabs audio is provided (20-90)
+        required: true
+        default: '54'
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install lightweight renderer
+        run: |
+          python -m pip install --disable-pip-version-check pillow numpy
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
+          fi
+          if [ ! -f /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf ] && [ ! -f /usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y fonts-dejavu-core
+          fi
+      - name: Build video with original event-aligned SFX
+        env:
+          QUALITY: ${{ inputs.quality }}
+          DURATION: ${{ inputs.duration }}
+        run: |
+          cat > render_g26.py <<'MM_CODE'
+          import argparse,csv,math,os,subprocess,wave
+          from functools import lru_cache
+          import numpy as np
+          from PIL import Image,ImageDraw,ImageFont
+
+          p=argparse.ArgumentParser()
+          p.add_argument('--width',type=int,default=432)
+          p.add_argument('--duration',type=float,default=54)
+          p.add_argument('--voice',default='audio/G26_voice.mp3')
+          p.add_argument('--output',default='G26.mp4')
+          p.add_argument('--still',type=float,default=None)
+          p.add_argument('--events',default='G26_events.csv')
+          a=p.parse_args()
+          W=a.width; S=W/720; H=(W*16//9)//2*2; FPS=30; SR=48000
+          REF=54.0; B=[0,2.1,6.9,10.2,14.2,19.6,23.9,27.3,31.1,35.7,38.1,44.6,48.2,50.2,54]
+          voice_file=a.voice if os.path.isfile(a.voice) else None
+          if voice_file:
+              probe=subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',voice_file],text=True)
+              D=float(probe.strip())
+          else:D=a.duration
+          assert 20<=D<=90,'Voice/duration should be between 20 and 90 seconds'
+          WHITE='#F5F5F5';LIME='#C6FF00';PINK='#FF5C9A';PURPLE='#8749D7';ORANGE='#FFAA65';BLUE='#40C4D8';NAVY='#17152F';BLACK='#101820';GREY='#94A6B1';RED='#FF716F';PALE='#EAE7ED'
+          HEAD=[('CRYPTO MILLIONAIRE','IN GTA 6?'),('A CRYPTO NAME','IN THE TRAILER'),('BUT WHAT IF...','YOU COULD TRADE IT?'),('BUY 1,000 COINS','WITH IN-GAME CASH'),('ONE CRAZY STUNT','EVERYONE IS WATCHING'),('THE INTERNET','GOES WILD'),('SELL AT THE TOP','AND GET RICH?'),('WAIT TOO LONG','AND IT COULD CRASH'),('A STOCK MARKET','FUELED BY CHAOS'),('BUT HERE\'S','THE CATCH'),('NOT CONFIRMED','NO REAL CASH-OUT'),('JUST A THEORY','NOT A FEATURE'),('MORE GTA MYSTERIES?','STAY CURIOUS'),('meanwhilemash','GET UPDATED')]
+          FOOT=['UNCONFIRMED GAMEPLAY THEORY','FICTIONAL NAME: DACITY COIN','HYPOTHETICAL TRADING SYSTEM','EXAMPLE: 1,000 FICTIONAL COINS','IMAGINED GAMEPLAY EVENT','ILLUSTRATIVE PRICE MOVEMENT','NOT REAL INVESTMENT ADVICE','ILLUSTRATIVE MARKET CRASH','NO CLAIM ABOUT FINAL GAME MECHANICS','REALITY CHECK','NO OFFICIAL PLAYABLE CRYPTO MARKET CONFIRMED','NOT AN OFFICIAL ROCKSTAR COIN','THEORY / GAMING','SUBSCRIBE FOR MORE']
+
+          def clamp(t):return max(0.,min(1.,t))
+          def ease(t):t=clamp(t);return t*t*(3-2*t)
+          def prog(t,at,d):return ease((t-at)/d)
+          def P(x,y):return (round(x*S),round(y*S))
+          def color_blend(a,b,t):
+              aa=[int(a[i:i+2],16) for i in (1,3,5)];bb=[int(b[i:i+2],16) for i in (1,3,5)]
+              return tuple(round(x+(y-x)*clamp(t)) for x,y in zip(aa,bb))
+          @lru_cache(None)
+          def font(size):
+              for f in ['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf','/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf']:
+                  try:return ImageFont.truetype(f,max(7,round(size*S)))
+                  except OSError:pass
+              raise RuntimeError('DejaVu/Liberation font unavailable')
+          def tx(d,x,y,t,size=28,col=WHITE,anchor='mm',maxw=650):
+              while font(size).getlength(t)>maxw*S and size>11:size-=1
+              d.text(P(x,y),t,font=font(size),fill=col,anchor=anchor)
+          def box(d,x,y,w,h,c,r=0,outline=None,sw=1):
+              if w<=0 or h<=0:return
+              d.rounded_rectangle([P(x,y),P(x+w,y+h)],radius=max(0,round(r*S)),fill=c,outline=outline,width=max(1,round(sw*S)))
+          def line(d,pts,c,w=2):d.line([P(*pt) for pt in pts],fill=c,width=max(1,round(w*S)),joint='curve')
+          def ellipse(d,x,y,rx,ry,fill=None,outline=None,sw=1):
+              if rx<=0 or ry<=0:return
+              d.ellipse([P(x-rx,y-ry),P(x+rx,y+ry)],fill=fill,outline=outline,width=max(1,round(sw*S)))
+          def poly(d,pts,col):d.polygon([P(*pt) for pt in pts],fill=col)
+          def cuboid(d,x,y,w,h,depth,front,top,side):
+              poly(d,[(x,y-h),(x+depth,y-h-depth*.38),(x+w+depth,y-h-depth*.38),(x+w,y-h)],top)
+              poly(d,[(x+w,y-h),(x+w+depth,y-h-depth*.38),(x+w+depth,y-depth*.38),(x+w,y)],side)
+              box(d,x,y-h,w,h,front,4)
+              line(d,[(x,y-h),(x+w,y-h),(x+w+depth,y-h-depth*.38)],PALE,1)
+          def coin(d,x,y,r,angle=0,highlight=False):
+              # Thick, shaded, elliptical coin seen from perspective, fully original icon
+              ratio=.70+.18*math.cos(angle)
+              ellipse(d,x+10,y+12,r,r*ratio,'#20263E')
+              ellipse(d,x+6,y+8,r,r*ratio,color_blend(ORANGE,PURPLE,.45))
+              ellipse(d,x,y,r,r*ratio,ORANGE,PINK,2)
+              for j in range(4):ellipse(d,x-3-j*1.5,y-3-j*1.3,r*(.82-j*.03),r*ratio*(.81-j*.03),None,color_blend(ORANGE,PALE,j/4),1)
+              tx(d,x,y,'D' if highlight else 'C',int(r*.87),NAVY)
+          def sky(d,offset=0,sun=True):
+              for layer in range(3):
+                  sp=[41,70,105][layer];dy=[765,823,886][layer]
+                  for j in range(-2,17):
+                      xx=j*sp-(offset*(layer+1)*4)%sp;hh=63+((j*43+layer*59)%192)
+                      colors=['#34294F','#35275D','#2B375C']
+                      box(d,xx,dy-hh,sp-5,hh,colors[layer],1)
+                      if layer>=1:
+                          for k in range(3):
+                              if (j+k+layer)%3:box(d,xx+10,dy-hh+14+k*28,6,7,ORANGE,1)
+              if sun:
+                  ellipse(d,572,363,72,72,ORANGE)
+                  for j in (87,105,125):ellipse(d,572,363,j,j,None,PINK,1)
+              line(d,[(0,906),(720,906)],BLUE,2)
+              for j in range(-7,8):line(d,[(360+j*26,906),(360+j*127,1140)],'#38486E',1)
+              for y in (929,970,1022,1100):line(d,[(0,y),(720,y)],'#37466B',1)
+
+          def no_brand(d):pass
+
+          y,x=np.ogrid[:H,:W];rad=np.sqrt(((x/W-.52)*1.26)**2+((y/H-.49)*1.03)**2)
+          fade=np.clip(1-rad*1.3,0,1)[...,None]
+          # Explicit (H,W,3): avoids earlier G25 full-HD broadcast bug.
+          base=np.broadcast_to(np.array([22,21,46],np.float32),(H,W,3)).copy()
+          base+=fade*np.array([27,12,28],np.float32)
+          base=np.uint8(np.clip(base,0,255));BACK=Image.fromarray(base,'RGB')
+          del x,y,rad,fade,base
+
+          def interface(d,title='DACITY COIN',state='TRADING SIMULATION'):
+              cuboid(d,108,914,500,477,25,'#252541','#69529A','#13172F')
+              box(d,128,455,460,425,'#131B32',15,PURPLE,2)
+              box(d,144,470,427,62,'#25314C',11)
+              tx(d,357,502,title,28,WHITE)
+              tx(d,357,550,state,17,ORANGE)
+
+          def chart(d,q,boost=False,fall=False):
+              x0=162;y0=771
+              for j in range(5):line(d,[(x0,580+j*46),(562,580+j*46)],'#2B3858',1)
+              pts=[(164,741),(202,727),(240,731),(278,685),(316,697),(354,638),(392,605),(430,551),(468,496),(505,472),(544,424)]
+              if fall:pts=[(164,505),(202,485),(240,459),(278,495),(316,537),(354,594),(392,603),(430,677),(468,709),(505,762),(544,781)]
+              f=prog(q,.1,2.55);n=max(2,int((len(pts)-1)*f)+1)
+              live=pts[:n]
+              line(d,live,RED if fall else ORANGE,5)
+              for px,py in live:ellipse(d,px,py,3.5,3.5,RED if fall else ORANGE)
+              if boost and f>.9:tx(d,355,824,'PRICE SURGE',25,PINK)
+              if fall and f>.9:tx(d,355,824,'MARKET CRASH',25,RED)
+
+          def frame_core(i,q):
+              im=BACK.copy();d=ImageDraw.Draw(im)
+              if i in (0,1,4,8,12):sky(d,q,True)
+              else:
+                  for j in range(7):line(d,[(40,365+j*95),(680,365+j*95)],'#30304D',1)
+              if i==0:
+                  f=prog(q,.1,.45);r=75+50*math.sin(min(1,q/1.7)*math.pi)
+                  coin(d,360,667,150*f,math.pi*q*.7,True)
+                  tx(d,360,1010,'CAN YOU GET RICH?',28,WHITE)
+                  for j in range(3):ellipse(d,360,667,196+48*j+10*q,154+32*j+8*q,None,PINK,2)
+              elif i==1:
+                  # Fictional stunt aircraft: original artwork, not copied from Rockstar
+                  x=95+400*prog(q,.3,3.1);y=650-75*math.sin(q*1.6)
+                  poly(d,[(x-128,y),(x+115,y),(x+143,y+22),(x-90,y+32)],PINK)
+                  poly(d,[(x-80,y-10),(x-23,y-90),(x+37,y-85),(x+55,y+2)],ORANGE)
+                  poly(d,[(x-101,y+4),(x-126,y-55),(x-88,y-51)],PURPLE)
+                  tx(d,x,y+15,'DACITY COIN',22,NAVY,maxw=235)
+                  for j in range(6):ellipse(d,x-145-j*22,y+8*math.sin(q*4+j),7,7,ORANGE)
+                  box(d,65,967,590,58,'#262740',16)
+                  tx(d,360,996,'TRAILER REFERENCE: FICTIONAL BRAND',19,WHITE)
+              elif i==2:
+                  interface(d,state='WHAT IF IT WERE TRADABLE?')
+                  coin(d,360,672,78+12*math.sin(q*2),q,True)
+                  box(d,242,800,236*prog(q,.4,.65),49,PURPLE,20)
+                  if q>1:tx(d,360,825,'TRADE?',27,WHITE)
+              elif i==3:
+                  interface(d,state='ILLUSTRATIVE IN-GAME BUY')
+                  coin(d,257,654,72,q,True)
+                  box(d,370,605,164,100,'#253C49',12)
+                  tx(d,452,638,'COINS',19,BLUE)
+                  num=int(1000*prog(q,.4,2.1));tx(d,452,675,f'{num:,}',34,ORANGE)
+                  box(d,222,779,279,62,PINK,16)
+                  tx(d,360,811,'BUY',29,NAVY)
+              elif i==4:
+                  # swooping stunt aircraft + dynamic trail, fake event only
+                  t=prog(q,.2,3.7);cx=130+510*t;cy=822-290*math.sin(math.pi*t)
+                  for j in range(20):
+                      tt=clamp(t-j*.028);xx=130+510*tt;yy=822-290*math.sin(math.pi*tt)
+                      ellipse(d,xx,yy,3.5+2*(1-j/20),3.5+2*(1-j/20),PINK if j%2 else ORANGE)
+                  poly(d,[(cx-48,cy+4),(cx+35,cy-16),(cx+83,cy+3),(cx+27,cy+13)],ORANGE)
+                  poly(d,[(cx-15,cy),(cx+15,cy-49),(cx+33,cy+4)],PINK)
+                  tx(d,360,965,'HYPOTHETICAL VIRAL STUNT',23,WHITE)
+              elif i==5:
+                  interface(d,state='HYPOTHETICAL PRICE MOVEMENT')
+                  chart(d,q,True,False)
+                  for j in range(3):
+                      f=prog(q,j*.8,.45)
+                      if f:box(d,475+j*25,365-j*33,44,25,PINK,9)
+                  tx(d,356,858,'ILLUSTRATIVE',15,BLUE)
+              elif i==6:
+                  interface(d,state='ILLUSTRATIVE SELL EVENT')
+                  coin(d,240,655,65,q,True)
+                  box(d,341,615,190,89,'#28494E',12)
+                  tx(d,436,644,'PROFIT?',22,BLUE)
+                  tx(d,436,682,'SOLD!',27,ORANGE)
+                  box(d,235,781,235*prog(q,.3,.7),59,PINK,12)
+                  if q>.8:tx(d,357,808,'SELL',31,NAVY)
+                  for j in range(6):
+                      u=prog(q,.7+j*.27,.43)
+                      if u:
+                          cuboid(d,156+j*65,946,43,55*u,14,'#F39D76','#FFD4A5','#8C3D66')
+              elif i==7:
+                  interface(d,state='ILLUSTRATIVE RISK')
+                  chart(d,q,False,True)
+                  for j in range(5):
+                      f=prog(q,.6+j*.32,.4)
+                      if f:coin(d,199+j*66,909-(90-57*f),24,math.pi*f,False)
+              elif i==8:
+                  # panoramic skyline behind transparent virtual stock dashboard
+                  box(d,69,422,580,456,'#1B2341',20,PURPLE,2)
+                  tx(d,360,477,'VICE-CITY-STYLE MARKET',22,WHITE)
+                  for j,h in enumerate([85,141,116,180,227,160,240]):
+                      f=prog(q,.25+j*.35,.72)
+                      cuboid(d,117+j*73,794,45,h*f,15,BLUE if j%2 else PURPLE,ORANGE,'#283A65')
+                  tx(d,360,846,'HYPOTHETICAL GAME SYSTEM',20,ORANGE)
+              elif i==9:
+                  for j in range(3):ellipse(d,360,661,105+j*52,105+j*52,None,RED if j==0 else PINK,3)
+                  tx(d,360,655,'!',148,ORANGE)
+                  tx(d,360,884,'REALITY CHECK',34,WHITE)
+              elif i==10:
+                  interface(d,state='NO CONFIRMED TRADE / CASH OUT')
+                  box(d,220,565,275,247,'#2D2D47',19,RED,3)
+                  poly(d,[(289,638),(333,592),(378,641),(433,581),(454,607),(381,686),(326,652)],RED)
+                  box(d,281,716,156,40,'#452F45',9)
+                  tx(d,360,738,'UNVERIFIED',20,WHITE)
+                  tx(d,357,845,'NO REAL CRYPTO REDEMPTION CLAIM',14,ORANGE)
+              elif i==11:
+                  box(d,72,433,570,414,'#292C49',20,PURPLE,2)
+                  tx(d,360,530,'THEORY',67,ORANGE)
+                  f=prog(q,.5,.55)
+                  box(d,117,595,482*f,71,RED,12)
+                  if f>.8:tx(d,360,630,'NOT CONFIRMED',32,NAVY)
+                  tx(d,360,750,'THIRD-PARTY TOKENS ≠ ROCKSTAR',17,WHITE)
+              elif i==12:
+                  coin(d,360,683,100+22*math.sin(q*1.3),q,False)
+                  for j in range(4):ellipse(d,360,683,145+j*35+20*prog(q,.2,1),145+j*35+20*prog(q,.2,1),None,LIME if j%2 else PINK,1)
+                  tx(d,360,990,'ONE MORE MYSTERY...',25,WHITE)
+              else:
+                  # CTA transforms the final coin/ring into the recognizable logo.
+                  u=q;r=130+60*prog(u,0,.9)
+                  for j in (0,1):ellipse(d,360,623,r+j*48,r+j*48,None,LIME,2 if j==0 else 1)
+                  tx(d,360,418,'MORE TO DISCOVER',31,WHITE)
+                  ww=(font(41).getlength('meanwhile')+font(41).getlength('mash'))/S
+                  left=360-ww/2
+                  tx(d,left,568,'meanwhile',41,WHITE,'lm')
+                  tx(d,left+font(41).getlength('meanwhile')/S,568,'mash',41,LIME,'lm')
+                  f=prog(u,.55,.65);click=math.exp(-((u-2.45)/.13)**2)
+                  w=398*f*(1-.06*click)
+                  box(d,360-w/2,689,w,77*(1-.08*click),LIME,37)
+                  if f>.65:tx(d,360,724,'SUBSCRIBE',32,NAVY,maxw=max(40,w-25))
+                  if u>2.45:
+                      j=prog(u,2.45,.7);ellipse(d,360,720,200+45*j,45+32*j,None,LIME,2)
+                  tx(d,360,870,'TO GET UPDATED',23,WHITE)
+                  tx(d,360,1005,'CURIOSITY WITHOUT LIMITS',17,GREY)
+              # Shared branding and statement panel
+              box(d,20,25,680,67,'#141D35',15)
+              tx(d,41,58,'meanwhile',24,WHITE,'lm')
+              tx(d,41+font(24).getlength('meanwhile')/S,58,'mash',24,LIME,'lm')
+              tx(d,680,58,'GAMING / G26',14,BLUE,'rm')
+              if i<13:
+                  box(d,24,123,672,153,'#141D35',16)
+                  tx(d,360,175,HEAD[i][0],43,WHITE)
+                  tx(d,360,236,HEAD[i][1],38,ORANGE)
+                  box(d,32,1070,656,95,'#141D35',13)
+                  tx(d,360,1113,FOOT[i],17,WHITE)
+              else:
+                  tx(d,360,1114,'SUBSCRIBE TO MEANWHILE MASH',18,WHITE)
+              box(d,38,1221,644,4,'#404460',2)
+              return im
+
+          def frame(ref_t):
+              i=next((j for j in range(len(B)-1) if ref_t<B[j+1]),len(B)-2)
+              q=ref_t-B[i];cur=frame_core(i,q)
+              # Short ease-based crossfade, no hard cuts. Preserve scene hook on first frame.
+              if i>0 and q<.36:
+                  prev=frame_core(i-1,B[i]-B[i-1]-.03)
+                  cur=Image.blend(prev,cur,prog(q,0,.36))
+              dr=ImageDraw.Draw(cur);box(dr,38,1221,644*clamp(ref_t/REF),4,LIME,2)
+              return cur
+
+          # Event schedule defined by same animated scene easing positions, frame quantized
+          # to actual output fps. Includes action-specific cues beyond transitions.
+          def event_list():
+              out=[]
+              def event(ref,kind,label,amp=.08):out.append((ref,kind,label,amp))
+              for j in range(1,len(B)-1):event(B[j],'whoosh',f'transition scene {j}',.095)
+              for t,kind,label in [(0,'impact','first-frame hook'),(.1,'ring','first coin appears'),(.55,'ring','coin spins'),(2.55,'whoosh','airplane moves'),(7.25,'ring','trade UI opens'),(10.6,'tick','buy counter begins'),(14.4,'whoosh','stunt begins'),(20,'rise','chart begins climbing'),(23.9,'impact','sell reveal'),(27.6,'fall','crash begins'),(31.4,'rise','city market bars'),(35.8,'impact','reality check'),(38.5,'alert','no cash-out warning'),(44.9,'impact','theory stamp'),(48.4,'ring','mystery ring'),(50.2,'whoosh','brand ring morph'),(50.75,'rise','subscribe expands'),(52.65,'click','subscribe button press'),(52.8,'ring','subscribe ripple')]:event(t,kind,label,.09)
+              # Buy counter: ten fast but distinct changes using exact eased fraction
+              def inv(v):
+                  lo=0.;hi=1.
+                  for _ in range(25):
+                      md=(lo+hi)/2
+                      if ease(md)<v:lo=md
+                      else:hi=md
+                  return (lo+hi)/2
+              for j in range(1,11):event(B[3]+.4+2.1*inv(j/10),'tick',f'purchase count {j}/10',.07)
+              # Plane motion and trail arrival
+              for j in range(1,11):event(B[4]+.2+3.7*inv(j/10),'air',f'plane moves {j}/10',.039)
+              # Chart points grow across 10 steps; exact progress of drawn segments.
+              for scene,start,dur,kind in [(5,.1,2.55,'tick'),(7,.1,2.55,'fall')]:
+                  for j in range(1,11):event(B[scene]+start+dur*inv(j/10),kind,f'chart point {scene}:{j}',.065)
+              for j in range(6):event(B[6]+.7+j*.27+.43,'cash',f'cash bundle {j+1}',.096)
+              for j in range(7):event(B[8]+.25+j*.35+.72,'build',f'skyline block {j+1}',.08)
+              return sorted((t,k,label,amp) for t,k,label,amp in out if t<REF)
+
+          def sound():
+              total=round(D*SR);mix=np.zeros((total,2),np.float32);rng=np.random.default_rng(2606);rows=[]
+              for t,kind,label,amp in event_list():
+                  seconds=t*D/REF;at=math.ceil(seconds*FPS-1e-7)/FPS;start=round(at*SR)
+                  dur={'whoosh':.27,'impact':.45,'air':.12,'ring':.32,'rise':.35,'fall':.24,'cash':.12,'build':.18,'alert':.35,'click':.09,'tick':.055}.get(kind,.13)
+                  n=max(2,round(dur*SR));z=np.arange(n,dtype=np.float32)/SR;u=z/dur
+                  white=rng.normal(0,1,n);fr=np.fft.rfftfreq(n,1/SR);ftt=np.fft.rfft(white)
+                  ftt*=np.minimum(1,(fr/260)**2)*np.minimum(1,(3900/np.maximum(fr,1))**3)
+                  noise=np.fft.irfft(ftt,n);noise/=max(1e-8,np.max(abs(noise)))
+                  if kind in ('whoosh','air'):v=noise*np.sin(np.pi*u)**2
+                  elif kind in ('cash','build'):v=(.35*np.sin(2*np.pi*650*z)+.65*noise)*np.exp(-z*28)
+                  elif kind in ('ring','rise'):v=(.80*np.sin(2*np.pi*(460*z+550*z*z))+.2*noise)*np.exp(-z*13)
+                  elif kind in ('impact','fall'):v=(.75*np.sin(2*np.pi*(80*z-35*z*z))+.25*noise)*np.exp(-z*13)
+                  elif kind=='alert':v=(.8*np.sin(2*np.pi*(350*z+110*z*z))+.2*noise)*np.sin(np.pi*u)**2
+                  else:v=(.55*np.sin(2*np.pi*(1200*z+240*z*z))+.45*noise)*np.exp(-z*52)
+                  fade=min(96,n//2);v[:fade]*=np.linspace(0,1,fade);v[-fade:]*=np.linspace(1,0,fade)
+                  m=min(n,total-start)
+                  if m>0:
+                      pan=(-.2 if int(t*10)%2 else .2)
+                      mix[start:start+m,0]+=v[:m]*amp*math.sqrt(1-pan)
+                      mix[start:start+m,1]+=v[:m]*amp*math.sqrt(1+pan)
+                      rows.append((round(at,3),kind,label))
+              peak=float(np.max(abs(mix)));limit=10**(-14/20)
+              if peak>limit:mix*=limit/peak
+              with wave.open('G26_SFX.wav','wb') as wf:
+                  wf.setparams((2,2,SR,0,'NONE','not compressed'))
+                  wf.writeframes(np.int16(np.clip(mix,-1,1)*32767).tobytes())
+              with open(a.events,'w',newline='') as h:
+                  w=csv.writer(h);w.writerow(('actual_s','sound','visual_action'));w.writerows(rows)
+              print('SFX cues:',len(rows),'peak dBFS:',round(20*math.log10(max(float(np.max(abs(mix))),1e-9)),1),flush=True)
+
+          def render():
+              sound()
+              cmd=['ffmpeg','-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r','30','-i','-']
+              if voice_file:
+                  cmd+=['-i',voice_file,'-i','G26_SFX.wav','-filter_complex','[1:a]aformat=channel_layouts=stereo,volume=1.0[vo];[2:a]aformat=channel_layouts=stereo,volume=0.38[fx];[vo][fx]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95,aformat=channel_layouts=stereo[a]','-map','0:v:0','-map','[a]']
+              else:cmd+=['-i','G26_SFX.wav','-map','0:v:0','-map','1:a:0']
+              cmd+=['-c:v','libx264','-preset','veryfast','-crf','21','-pix_fmt','yuv420p','-c:a','aac','-b:a','192k','-ar','48000','-ac','2','-t',str(D),'-movflags','+faststart',a.output]
+              print('Voice embedded:',bool(voice_file),'actual duration:',D,'resolution:',W,H,flush=True)
+              with subprocess.Popen(cmd,stdin=subprocess.PIPE) as proc:
+                  try:
+                      for k in range(round(D*FPS)):
+                          proc.stdin.write(frame((k/FPS)*REF/D).tobytes())
+                          if k%(FPS*10)==0:print('Rendered',k/FPS,'/',round(D,2),flush=True)
+                      proc.stdin.close()
+                      if proc.wait()!=0:raise RuntimeError('FFmpeg render failed')
+                  except Exception:
+                      proc.kill();raise
+
+          if __name__=='__main__':
+              if a.still is not None:
+                  frame(a.still*REF/D).save(a.output)
+              else:render()
+          MM_CODE
+          python -m py_compile render_g26.py
+          if [ "$QUALITY" = full ]; then WIDTH=1080; else WIDTH=432; fi
+          python render_g26.py --width "$WIDTH" --duration "$DURATION" --voice audio/G26_voice.mp3 --output MeanwhileMash_G26.mp4 --events G26_EVENTS.csv
+          ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels -show_entries format=duration -of default=noprint_wrappers=1 MeanwhileMash_G26.mp4
+          cat > G26_NOTES.txt <<'MM_NOTES'
+          MeanwhileMash G26 | Is GTA VI crypto tradable?
+          Verified: The fictional Dacity Coin name appeared on a promotional stunt plane.
+          Unverified: A player-controlled crypto market or real-money crypto cash-out.
+          Scenes are illustrative fiction. This video does NOT promote real GTA tokens.
+          Main brand: meanwhile white + mash electric lime (#C6FF00).
+          GTA VI-inspired color palette: pink, purple, orange, cyan, deep navy.
+          The event sheet maps SFX to action animations at output-frame resolution.
+          If audio/G26_voice.mp3 exists, it is mixed into the MP4 automatically.
+          Without voice MP3, the MP4 contains original SFX only.
+          The current scene timings are estimated; supplying G26 MP3 allows precise phrase-level retiming.
+          MM_NOTES
+      - name: Upload MP4, WAV, events and notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: meanwhilemash-g26-crypto
+          path: |
+            MeanwhileMash_G26.mp4
+            G26_SFX.wav
+            G26_EVENTS.csv
+            G26_NOTES.txt

@@ -1,0 +1,631 @@
+name: MeanwhileMash - Premium Bone Lookdev (3 Blender Stills)
+
+# Manually triggered to save GitHub Actions minutes.
+on:
+  workflow_dispatch:
+    inputs:
+      quality:
+        description: "quick = 540x960 / 16 samples; review = 720x1280 / 32 samples"
+        required: true
+        type: choice
+        default: quick
+        options:
+          - quick
+          - review
+      scene:
+        description: "Render only one scene for low-cost fixes, or all three"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - wide
+          - osteoclast
+          - osteoblast
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meanwhilemash-bone-lookdev-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  blender-lookdev:
+    name: CPU Blender - actual 3D stills only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      RENDER_OUT: ${{ github.workspace }}/renders
+    steps:
+      - name: Install Blender only if needed (Ubuntu 24.04 universe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v blender >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends blender
+          else
+            echo "Using preinstalled Blender"
+          fi
+          blender --version | head -n 3
+
+      - name: Create self-contained procedural Blender renderer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/render_bone_stills.py" <<'PYTHON_RENDERER'
+          """MeanwhileMash premium bone look-dev stills, authored for Blender 4.0+.
+          Three actual Blender renders for G2 quality review; no video or narration.
+          All geometry/materials made procedurally. No downloads or external assets.
+          Models are illustrative anatomical/scientific visualizations, not patient-accurate scans.
+          """
+          import bpy
+          import math
+          import mathutils
+          import random
+          import os
+          import sys
+          import json
+          import time
+          import argparse
+          from mathutils import Vector
+          from math import sin, cos, pi, sqrt, exp
+          
+          SEED = 20261121
+          RNG = random.Random(SEED)
+          ROOT = os.path.abspath(os.environ.get('RENDER_OUT', 'renders'))
+          os.makedirs(ROOT, exist_ok=True)
+          
+          # Colors are authored as Blender linear/RGB color components and converted by AgX.
+          COLORS = {
+              'bg': (0.012,0.035,0.048,1),
+              'bone': (0.79,0.72,0.60,1),
+              'bone_light': (0.94,0.86,0.73,1),
+              'bone_shadow': (0.46,0.35,0.25,1),
+              'lime': (0.56,1.00,0.02,1),
+              'ivory': (0.94,0.96,0.93,1),
+              'purple': (0.42,0.23,0.48,1),
+              'purple_dark': (0.22,0.10,0.30,1),
+              'cell': (0.63,0.76,0.79,1),
+              'collagen': (0.95,0.85,0.68,1),
+              'acid': (0.96,0.78,0.35,1),
+          }
+          
+          
+          def new_mat(name, base, rough=0.63, metallic=0.0, subsurf=0.0, noise=0.0, emission=0.0):
+              m = bpy.data.materials.new(name)
+              m.diffuse_color = base
+              m.use_nodes = True
+              nt = m.node_tree
+              p = nt.nodes.get('Principled BSDF')
+              p.inputs['Base Color'].default_value = base
+              p.inputs['Roughness'].default_value = rough
+              p.inputs['Metallic'].default_value = metallic
+              if 'Subsurface Weight' in p.inputs:
+                  p.inputs['Subsurface Weight'].default_value = subsurf
+              if emission:
+                  p.inputs['Emission Color'].default_value = base
+                  p.inputs['Emission Strength'].default_value = emission
+              if noise:
+                  n = nt.nodes.new('ShaderNodeTexNoise')
+                  n.inputs['Scale'].default_value = noise
+                  n.inputs['Detail'].default_value = 3.0
+                  n.inputs['Roughness'].default_value = .67
+                  b = nt.nodes.new('ShaderNodeBump')
+                  b.inputs['Strength'].default_value = .20 if noise<25 else .12
+                  b.inputs['Distance'].default_value = .035 if noise<25 else .015
+                  nt.links.new(n.outputs['Fac'], b.inputs['Height'])
+                  nt.links.new(b.outputs['Normal'], p.inputs['Normal'])
+              return m
+          
+          
+          def translucent(name, tint, alpha=.08):
+              m = bpy.data.materials.new(name)
+              m.use_nodes = True
+              nt=m.node_tree; nt.nodes.clear()
+              out=nt.nodes.new('ShaderNodeOutputMaterial')
+              tr=nt.nodes.new('ShaderNodeBsdfTransparent')
+              p=nt.nodes.new('ShaderNodeBsdfPrincipled')
+              p.inputs['Base Color'].default_value=tint
+              p.inputs['Roughness'].default_value=.33
+              mix=nt.nodes.new('ShaderNodeMixShader')
+              mix.inputs[0].default_value=alpha
+              nt.links.new(tr.outputs[0],mix.inputs[1]); nt.links.new(p.outputs[0],mix.inputs[2]); nt.links.new(mix.outputs[0],out.inputs['Surface'])
+              return m
+          
+          
+          def setup_materials():
+              return {
+                  'bone': new_mat('Warm mineralized bone | high-frequency pores',COLORS['bone'], .78,subsurf=.025, noise=18),
+                  'edge': new_mat('Warm cortical bone',COLORS['bone_light'], .61,subsurf=.04,noise=35),
+                  'shadow': new_mat('Weathered dark bone',COLORS['bone_shadow'], .85,noise=24),
+                  'lime': new_mat('Brand lime light',COLORS['lime'], .38,emission=2.3),
+                  'white': new_mat('Off white anatomy',COLORS['ivory'], .57,subsurf=.04,noise=38),
+                  'purple': new_mat('Osteoclast organic purple membrane',COLORS['purple'],.56,subsurf=.12,noise=14),
+                  'purple_dark': new_mat('Osteoclast multiple nuclei',COLORS['purple_dark'],.31,subsurf=.08,noise=22),
+                  'blue': new_mat('Osteoblast cell pale cyan',COLORS['cell'],.48,subsurf=.13,noise=25),
+                  'collagen': new_mat('Fresh collagen-rich osteoid',COLORS['collagen'],.82,noise=42),
+                  'crystal': new_mat('Mineral crystals',COLORS['bone_light'],.25,metallic=.12),
+                  'acid': new_mat('Resorption acid particles',COLORS['acid'],.30,emission=.65),
+                  'ghost': translucent('Semi-transparent body silhouette',(.24,.62,.72,1),.085),
+                  'dark': new_mat('Deep charcoal',(.014,.026,.034,1),.65),
+                  'floor': new_mat('Deep teal floor',(.017,.064,.078,1),.69,noise=44),
+              }
+          
+          
+          def reset_scene(quality='quick'):
+              bpy.ops.object.select_all(action='SELECT')
+              bpy.ops.object.delete(use_global=False)
+              for datablock in list(bpy.data.materials):
+                  if datablock.users == 0: bpy.data.materials.remove(datablock)
+              s = bpy.context.scene
+              s.render.engine = 'CYCLES'
+              s.cycles.device = 'CPU'
+              s.cycles.samples = 16 if quality == 'quick' else 32
+              if hasattr(s.cycles, 'use_denoising'): s.cycles.use_denoising = True
+              if hasattr(bpy.context.view_layer.cycles, 'use_denoising'): bpy.context.view_layer.cycles.use_denoising = True
+              s.cycles.max_bounces = 3
+              s.cycles.diffuse_bounces = 2
+              s.cycles.glossy_bounces = 2
+              s.cycles.transparent_max_bounces = 3
+              s.render.resolution_x = 540 if quality == 'quick' else 720
+              s.render.resolution_y = 960 if quality == 'quick' else 1280
+              s.render.resolution_percentage = 100
+              s.render.image_settings.file_format='PNG'
+              s.render.image_settings.color_mode='RGBA'
+              s.render.film_transparent=False
+              s.render.threads_mode='FIXED'
+              s.render.threads=min(4, max(1,os.cpu_count() or 2))
+              try:
+                  s.view_settings.view_transform='AgX'
+                  s.view_settings.look='AgX - Medium High Contrast'
+              except (TypeError,ValueError):
+                  try:s.view_settings.look='Medium High Contrast'
+                  except (TypeError,ValueError):pass
+              s.view_settings.exposure=0
+              s.view_settings.gamma=1
+              s.world.use_nodes=True
+              bg=s.world.node_tree.nodes.get('Background')
+              bg.inputs['Color'].default_value=COLORS['bg']
+              bg.inputs['Strength'].default_value=.36
+              s.camera=None
+              return s,setup_materials()
+          
+          
+          def assign(obj,mat,smooth=True):
+              obj.data.materials.append(mat)
+              if smooth and obj.type=='MESH':
+                  for p in obj.data.polygons:p.use_smooth=True
+              return obj
+          
+          
+          def uv(name, loc, scale, mat, segments=32, rings=20):
+              bpy.ops.mesh.primitive_uv_sphere_add(segments=segments,ring_count=rings,location=loc)
+              o=bpy.context.object; o.name=name
+              o.scale=scale
+              assign(o,mat)
+              return o
+          
+          
+          def rounded_cube(name,loc,scale,mat,bevel=.12):
+              bpy.ops.mesh.primitive_cube_add(size=1,location=loc)
+              o=bpy.context.object; o.name=name; o.dimensions=scale
+              bpy.ops.object.transform_apply(location=False,rotation=False,scale=True)
+              m=o.modifiers.new('Organic rounded edges','BEVEL');m.width=bevel;m.segments=3
+              n=o.modifiers.new('Weighted normal','WEIGHTED_NORMAL')
+              assign(o,mat,False)
+              return o
+          
+          
+          def curve(name,pts,thickness,mat,closed=False,bezier=True):
+              cu=bpy.data.curves.new(name,'CURVE');cu.dimensions='3D';cu.resolution_u=14
+              cu.bevel_depth=thickness;cu.resolution_u=16;cu.bevel_resolution=4
+              sp=cu.splines.new('BEZIER' if bezier else 'POLY')
+              if bezier:
+                  sp.bezier_points.add(len(pts)-1)
+                  for bp,p in zip(sp.bezier_points,pts):
+                      bp.co=p;bp.handle_left_type='AUTO';bp.handle_right_type='AUTO'
+                  sp.use_cyclic_u=closed
+              else:
+                  sp.points.add(len(pts)-1)
+                  for q,p in zip(sp.points,pts):q.co=(*p,1)
+                  sp.use_cyclic_u=closed
+              ob=bpy.data.objects.new(name,cu);bpy.context.collection.objects.link(ob)
+              assign(ob,mat,False)
+              return ob
+          
+          
+          def mesh_obj(name, verts, faces, mat):
+              me=bpy.data.meshes.new(name);me.from_pydata(verts,[],faces);me.update()
+              ob=bpy.data.objects.new(name,me);bpy.context.collection.objects.link(ob)
+              assign(ob,mat)
+              return ob
+          
+          
+          def frame_camera(location, target, lens=44, ortho=None):
+              bpy.ops.object.camera_add(location=location)
+              c=bpy.context.object;c.name='CINEMATIC CAMERA';c.rotation_euler=(Vector(target)-c.location).to_track_quat('-Z','Y').to_euler()
+              if ortho:
+                  c.data.type='ORTHO';c.data.ortho_scale=ortho
+              else:
+                  c.data.lens=lens
+              c.data.dof.use_dof=True
+              focus=bpy.data.objects.new('Focus target',None);bpy.context.collection.objects.link(focus)
+              focus.location=target
+              c.data.dof.focus_object=focus;c.data.dof.aperture_fstop=8.0
+              bpy.context.scene.camera=c
+              return c
+          
+          
+          def area(name, loc, color, power, size, target):
+              data=bpy.data.lights.new(name,'AREA');data.energy=power;data.color=color
+              data.shape='DISK';data.size=size
+              o=bpy.data.objects.new(name,data);bpy.context.collection.objects.link(o)
+              o.location=loc;o.rotation_euler=(Vector(target)-o.location).to_track_quat('-Z','Y').to_euler()
+          
+          
+          def light_rig(scale=1, focus=(0,0,0)):
+              x,y,z=focus
+              area('Warm cinematic key', (x-4*scale,y-5*scale,z+6*scale),(1,.82,.68),960*scale,4.4*scale,focus)
+              area('Teal soft fill', (x+4*scale,y-1*scale,z+4*scale),(.24,.70,.86),700*scale,5.5*scale,focus)
+              area('Electric lime rim', (x+.5*scale,y+5*scale,z+4*scale),(.63,1,.22),810*scale,3.2*scale,focus)
+          
+          
+          def camera_title_overlay(cam,mats):
+              # True Blender 3D typography, parented to camera. No postprocessing dependency.
+              for word,loc,mat in [('meanwhile',(-.95,1.63,-3.25),mats['white']),('mash',(-.40,1.63,-3.25),mats['lime'])]:
+                  fc=bpy.data.curves.new('Wordmark '+word,'FONT')
+                  fc.body=word;fc.size=.12;fc.extrude=.0003
+                  ob=bpy.data.objects.new('Brand '+word,fc);bpy.context.collection.objects.link(ob)
+                  ob.parent=cam;ob.location=loc
+                  ob.data.materials.append(mat)
+          
+          
+          def dark_stage(mats, z=-3.95):
+              rounded_cube('Technical studio ground',(0,0,z-.16),(22,22,.3),mats['floor'],.1)
+              for i in range(-10,11):
+                  curve('Faint grid X'+str(i),[(-11,i*.7,z+.007),(11,i*.7,z+.007)],.006,mats['dark'],bezier=False)
+                  curve('Faint grid Y'+str(i),[(i*.7,-11,z+.007),(i*.7,11,z+.007)],.006,mats['dark'],bezier=False)
+          
+          
+          def bone_segment(name,a,b,r,mat):
+              a,b=Vector(a),Vector(b)
+              mid=(a+b)*.5
+              diff=b-a
+              ob=uv(name,mid,(r,r,diff.length*.53+r*.12),mat,28,16)
+              ob.rotation_euler=diff.to_track_quat('Z','Y').to_euler()
+              return ob
+          
+          
+          def femur(name,hip,knee,mat,mirror=1):
+              # Shaft profile, flared distal condyles and offset ball head: not a uniform cylinder.
+              hx,hy,hz=hip;kx,ky,kz=knee
+              p=[(0.0,(-.04*mirror,0,.0),(.31,.25)),
+                 (.11,(-.23*mirror,0,-.07),(.19,.17)),
+                 (.24,(-.21*mirror,.015,-.14),(.16,.15)),
+                 (.50,(-.10*mirror,.035,-.18),(.15,.15)),
+                 (.76,(.06*mirror,.01,-.05),(.19,.17)),
+                 (.91,(.08*mirror,-.005,-.01),(.28,.23)),
+                 (1.0,(0,0,.02),(.36,.28))]
+              pts=[];faces=[];n=20
+              for t,ofs,rs in p:
+                  cx=hx+(kx-hx)*t+ofs[0]
+                  cy=hy+(ky-hy)*t+ofs[1]
+                  cz=hz+(kz-hz)*t+ofs[2]
+                  for i in range(n):
+                      a=2*pi*i/n
+                      pts.append((cx+rs[0]*cos(a),cy+rs[1]*sin(a),cz))
+              for j in range(len(p)-1):
+                  for i in range(n):
+                      a=j*n+i;b=j*n+(i+1)%n
+                      faces.append((a,b,b+n,a+n))
+              faces.extend([tuple(range(n-1,-1,-1)),tuple((len(p)-1)*n+i for i in range(n))])
+              obj=mesh_obj(name+' femur sculpt',pts,faces,mat)
+              sub=obj.modifiers.new('Smooth cortical form','SUBSURF');sub.levels=2;sub.render_levels=2
+              uv(name+' femoral head',(hx-.20*mirror,hy,hz+.12),(.38,.31,.36),mat)
+              uv(name+' medial distal condyle',(kx+.22*mirror,ky,kz),(.28,.29,.26),mat)
+              uv(name+' lateral distal condyle',(kx-.22*mirror,ky,kz),(.27,.28,.27),mat)
+              return obj
+          
+          
+          def skeleton(m):
+              # Stylized anatomy for establishing shot; real medical scan assets are NOT included.
+              uv('Cranium',(0,0,5.25),(.49,.37,.59),m['white'],48,28)
+              uv('Jaw',(0,-.14,4.70),(.34,.29,.19),m['edge'])
+              for sx in (-1,1):
+                  uv('Eye socket shadow',(sx*.21,-.335,5.25),(.155,.055,.19),m['dark'])
+                  bone_segment('Clavicle',(.12*sx,-.10,4.12),(.95*sx,-.05,4.15),.08,m['white'])
+                  # upper arm, forearm, hand; not enough detail for closeup use.
+                  bone_segment('Humerus',(1.02*sx,-.02,4.07),(1.27*sx,-.02,2.90),.115,m['white'])
+                  bone_segment('Radius',(1.26*sx,-.02,2.85),(1.27*sx,-.21,1.80),.075,m['white'])
+                  bone_segment('Ulna',(1.27*sx,.07,2.85),(1.28*sx,.07,1.79),.065,m['edge'])
+                  uv('Hand',(1.29*sx,-.08,1.62),(.15,.12,.28),m['edge'])
+                  # Pelvis ilium and acetabular rim, smooth tapered arcs.
+                  curve('Ilium arc',[(.20*sx,0,1.55),(.53*sx,.0,1.92),(.89*sx,.07,1.84),(.83*sx,-.04,1.44),(.47*sx,-.10,1.27)],.145,m['edge'])
+                  curve('Pubic ramus',[(.49*sx,-.10,1.27),(.3*sx,-.16,1.04),(0,-.16,1.09)],.105,m['bone'])
+                  hip=(.63*sx,.025,1.28);knee=(.68*sx,-.075,-1.10)
+                  femur('RIGHT highlighted' if sx==1 else 'LEFT', hip, knee, m['lime'] if sx==1 else m['white'],sx)
+                  bone_segment('Tibia',(.68*sx,-.07,-1.36),(.72*sx,-.13,-3.43),.16,m['white'])
+                  bone_segment('Fibula',(.85*sx,.02,-1.35),(.91*sx,.05,-3.33),.075,m['edge'])
+                  uv('Kneecap',(.69*sx,-.28,-1.16),(.24,.13,.22),m['edge'])
+                  uv('Foot',(.75*sx,-.38,-3.64),(.24,.56,.19),m['white'])
+              for j in range(22):
+                  z=1.45+j*.143
+                  sc=.105+(.032 if j>=14 else 0)
+                  uv('Vertebra %02d'%j,(.065*sin(j*.3),.11,z),(sc,.19,.095),m['edge'],20,12)
+              uv('Sacrum',(0,.13,1.29),(.31,.23,.42),m['bone'])
+              for i in range(10):
+                  z=2.65+i*.16
+                  w=.79+.28*sin((i/10)*pi)
+                  # Ribs arch around spine to anterior sternum as a pair.
+                  for s in (-1,1):
+                      pts=[(0,.14,z+.06),(s*w*.55,.55,z+.075),(s*w,.25,z),(s*w*.98,-.30,z-.12),(s*.35,-.62,z-.16)]
+                      curve('Rib %d %d'%(i,s),pts,.065,m['edge'])
+              bone_segment('Sternum',(0,-.56,4.03),(0,-.60,2.95),.09,m['edge'])
+              # Transparent human silhouette for the wide anatomical reveal.
+              uv('Ghost head',(0,.015,5.25),(.57,.46,.72),m['ghost'],40,26)
+              uv('Ghost chest',(0,.02,3.38),(1.21,.65,1.08),m['ghost'],48,32)
+              uv('Ghost abdomen',(0,.03,2.12),(.77,.53,.81),m['ghost'],40,26)
+              uv('Ghost pelvis',(0,.02,1.36),(.98,.62,.53),m['ghost'],40,26)
+              # Scientific locator on the same femur represented in microscopic views.
+              center=(.68,-.23,.20)
+              for r in (.33,.45):
+                  pts=[(center[0]+r*cos(2*pi*i/96),center[1],center[2]+r*sin(2*pi*i/96)) for i in range(96)]
+                  curve('Selected region on femur',pts,.018,m['lime'],closed=True)
+          
+          
+          def create_lattice(m, seed=77):
+              # Curved interconnected spongy bone struts as an organic backdrop,
+              # with varied widths, branching, noise surface and intentionally irregular pores.
+              rr=random.Random(seed)
+              for layer in range(2):
+                  y=1.3+layer*.7
+                  coords={}
+                  for zi in range(5):
+                      for xi in range(7):
+                          coords[(xi,zi)]=(-2.85+xi*.95+rr.uniform(-.15,.15),
+                                           y+rr.uniform(-.2,.2),
+                                           -.2+zi*.72+rr.uniform(-.2,.2))
+                  for zi in range(5):
+                      for xi in range(7):
+                          src=coords[(xi,zi)]
+                          for dx,dz in [(1,0),(0,1),(1,1)]:
+                              if (xi+dx,zi+dz) not in coords or rr.random() <(.10 if dx==1 and dz==1 else .04):continue
+                              dest=coords[(xi+dx,zi+dz)]
+                              mid=tuple((src[k]+dest[k])/2+ (rr.uniform(-.09,.09) if k!=1 else -.08) for k in range(3))
+                              curve('Branching trabecular strut',(src,mid,dest),rr.uniform(.095,.17),m['bone'])
+                              if rr.random()<.11:
+                                  uv('Trabecular junction',src,(.17,.16,.15),m['edge'],16,12)
+          
+          
+          def mineral_surface(x,y,depth):
+              """Identical landmark/pit between osteoclast and osteoblast scenes."""
+              a=((x-.13)/.95)**2+((y+.05)/.78)**2
+              crater=-depth*exp(-1.75*a)
+              ridge=.095*exp(-3.4*(sqrt(max(a,0))-.95)**2)
+              rip=.050*sin(3.8*x+1.2*y)*cos(4.0*y-.4*x)
+              porous=.024*sin(14*x+3*sin(7*y))*sin(12*y-.2)
+              return crater+ridge+rip+porous
+          
+          
+          def sculpted_bone_patch(m,stage):
+              # Truly concave heightfield mesh (not a black painted circle).
+              nx,ny=80,62
+              sx,sy=6.6,4.7
+              depth=.65 if stage=='remove' else .45
+              verts=[];faces=[]
+              for j in range(ny+1):
+                  y=(j/ny-.5)*sy
+                  for i in range(nx+1):
+                      x=(i/nx-.5)*sx
+                      h=mineral_surface(x,y,depth)
+                      verts.append((x,y,h))
+              for j in range(ny):
+                  for i in range(nx):
+                      a=j*(nx+1)+i;faces.append((a,a+1,a+nx+2,a+nx+1))
+              surf=mesh_obj('CONTINUITY LOCATION: same eroded bone surface',verts,faces,m['bone'])
+              # Cortical rim and porous surround, kept stable between micro shots.
+              for axis in (-1,1):
+                  curve('Broken edge of trabecular wall',[(axis*3.25,-2.15,-.13),(axis*3.24,0,.09),(axis*3.25,2.14,-.13)],.17,m['edge'])
+              return surf
+          
+          
+          def dust(m,count=85):
+              rr=random.Random(20)
+              for i in range(count):
+                  x=rr.uniform(-3.2,3.2);y=rr.uniform(-1.4,1.7);z=rr.uniform(.3,3.1)
+                  if rr.random()<.7:mat=m['lime'] if i%11==0 else m['crystal']
+                  else:mat=m['acid']
+                  r=rr.uniform(.013,.045)
+                  uv('Atmospheric detail particle',(x,y,z),(r,r,r),mat,10,8)
+          
+          
+          def osteoclast(m):
+              # Multinucleated irregular purple cell: asymmetry, ruffled leading border,
+              # organelle/nuclei detail, resorption pit particles.
+              body=uv('OSTEOCLAST multi-lobed body',(.14,-.04,.85),(1.02,.76,.67),m['purple'],56,32)
+              tex=bpy.data.textures.new('Membrane irregularity',type='CLOUDS');tex.noise_scale=.23
+              mod=body.modifiers.new('Folds in osteoclast membrane','DISPLACE')
+              mod.texture=tex;mod.strength=.15;mod.mid_level=.5
+              # Soft ruffled skirt with many folded membrane waves. Distinct from a featureless blob.
+              N=128; rings=7;vs=[];fs=[]
+              for j in range(rings):
+                  t=j/(rings-1)
+                  for k in range(N):
+                      a=2*pi*k/N
+                      r=(.54+.48*t)*(1+.065*sin(11*a+1.3*t)+.04*sin(27*a))
+                      z=.45*(1-t) +(.02+.08*sin(13*a+4*t))*t
+                      vs.append((.13+r*cos(a),-.05+.77*r*sin(a),z))
+              for j in range(rings-1):
+                  for k in range(N):
+                      a=j*N+k;b=j*N+(k+1)%N;fs.append((a,b,b+N,a+N))
+              mesh_obj('Ruffled sealing interface / resorption border',vs,fs,m['purple_dark'])
+              for i,(x,y,z,r) in enumerate([
+                  (-.25,-.31,1.30,.20),(.25,-.39,1.45,.16),(.50,.14,1.28,.19),(-.34,.27,1.21,.16),(.06,.32,1.55,.15)]):
+                  uv('Osteoclast nucleus %d'%i,(x,y,z),(r,r*.71,r*.63),m['purple_dark'],24,16)
+              # A few acid-release streams near the resorption surface; scientifically schematic.
+              rr=random.Random(81)
+              for i in range(66):
+                  a=rr.uniform(0,2*pi);r=rr.uniform(.22,.80)
+                  x=.13+r*cos(a);y=-.06+.70*r*sin(a)
+                  z=mineral_surface(x,y,.65)+rr.uniform(.12,.28)
+                  q=rr.uniform(.016,.043)
+                  uv('Acid/enzyme release mark %02d'%i,(x,y,z),(q,q,q),m['acid'] if i%3 else m['lime'],12,8)
+              for i in range(50):
+                  a=rr.uniform(0,2*pi);r=rr.uniform(.62,1.55)
+                  x=.13+r*cos(a);y=-.06+.68*r*sin(a)
+                  z=mineral_surface(x,y,.65)+rr.uniform(.06,.50)
+                  q=rr.uniform(.035,.11)
+                  ob=uv('Excavated bone microfragment',(x,y,z),(q,q*.7,q*.55),m['edge'],10,8)
+                  ob.rotation_euler=(rr.random()*3,rr.random()*3,rr.random()*3)
+          
+          
+          def osteoblasts(m):
+              # Building cells sit on the SAME damaged patch. Matrix fills part of that pit.
+              positions=[]
+              for i in range(12):
+                  ang=pi*1.04 + (pi*.94)*(i/11)
+                  x=.13+1.23*cos(ang);y=-.05+.92*sin(ang)
+                  z=mineral_surface(x,y,.45)+.24
+                  positions.append((x,y,z))
+              for i,(x,y,z) in enumerate(positions):
+                  o=rounded_cube('OSTEOBLAST cuboidal cell %02d'%i,(x,y,z),(.37,.35,.45),m['blue'],.10)
+                  # Nuclear body visible in each differentiated cell.
+                  uv('Osteoblast distinct nucleus %02d'%i,(x,y,z+.17),(.095,.083,.05),m['lime'],18,12)
+              # Progressive cross-linked collagen filament deposition within pit.
+              rr=random.Random(11)
+              for j in range(33):
+                  y=-.72+(j%22)*.064
+                  angle=j*.27
+                  a=-.85+rr.uniform(-.12,.04);b=.95+rr.uniform(-.08,.12)
+                  pts=[]
+                  for i in range(11):
+                      x=a+(b-a)*i/10
+                      wobble=.035*sin(i*.9+angle)
+                      z=mineral_surface(x,y+wobble,.45)+.18+.013*j/33
+                      pts.append((x,y+wobble,z))
+                  curve('Collagen rich new osteoid matrix %02d'%j,pts,.022 if j%4 else .034,m['collagen'])
+              # Mineralization: crystalline droplets sitting on freshly deposited osteoid.
+              for i in range(85):
+                  x=rr.uniform(-.8,.9);y=rr.uniform(-.60,.68)
+                  if ((x-.13)/1.05)**2+((y+.05)/.90)**2>1:continue
+                  z=mineral_surface(x,y,.45)+rr.uniform(.19,.37)
+                  r=rr.uniform(.025,.07)
+                  bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1,radius=r,location=(x,y,z))
+                  o=bpy.context.object;o.name='Mineral particle settling';assign(o,m['crystal'])
+              # Reference landmark retained across stages.
+              curve('Reference original microcrack direction',[(1.25,-.2,.06),(1.63,-.13,.13),(1.91,-.21,.08)],.03,m['shadow'])
+          
+          
+          def render_wide(m):
+              dark_stage(m)
+              skeleton(m)
+              cam=frame_camera((7.8,-16.0,5.0),(0,0,.90),39)
+              light_rig(1.4,(0,0,1.2))
+              camera_title_overlay(cam,m)
+              return 'Wide anatomical reveal: transparent body, shaped skeleton, highlighted right femur'
+          
+          
+          def render_resorption(m):
+              sculpted_bone_patch(m,'remove')
+              create_lattice(m)
+              osteoclast(m)
+              dust(m)
+              cam=frame_camera((3.2,-7.6,3.65),(.06,.05,.55),53)
+              light_rig(0.8,(.08,0,.45))
+              camera_title_overlay(cam,m)
+              return 'Osteoclast: resorption pit in same bone patch, ruffled border and visible excavation'
+          
+          
+          def render_formation(m):
+              sculpted_bone_patch(m,'build')
+              create_lattice(m)
+              osteoblasts(m)
+              dust(m)
+              cam=frame_camera((2.2,-7.6,3.9),(.02,0,.50),52)
+              light_rig(.8,(.05,0,.4))
+              camera_title_overlay(cam,m)
+              return 'Osteoblasts: collagen-rich osteoid deposited into same original pit, early mineralization'
+          
+          
+          def main():
+              parser=argparse.ArgumentParser()
+              parser.add_argument('--quality',choices=('quick','review'),default='quick')
+              parser.add_argument('--scene',choices=('all','wide','osteoclast','osteoblast'),default='all')
+              args=parser.parse_args(sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else [])
+              jobs=[('01_femur_reveal',render_wide),('02_osteoclast_resorption',render_resorption),('03_osteoblast_formation',render_formation)]
+              if args.scene!='all':
+                  lookup={'wide':'01_femur_reveal','osteoclast':'02_osteoclast_resorption','osteoblast':'03_osteoblast_formation'}
+                  jobs=[item for item in jobs if item[0]==lookup[args.scene]]
+              report={'engine': 'Blender Cycles CPU', 'blender': bpy.app.version_string,
+                      'quality':args.quality,'seed':SEED,'files':[],
+                      'reference':'Six-panel approved storyboard: concept art, not 3D engine proof',
+                      'note':'Actual Blender PNGs for visual approval; not scientific-scale patient-specific models.'}
+              for name,build in jobs:
+                  sc,mat=reset_scene(args.quality)
+                  description=build(mat)
+                  fpath=os.path.join(ROOT,name+'.png')
+                  sc.render.filepath=fpath
+                  print('START RENDER',name,description,flush=True)
+                  start=time.monotonic()
+                  bpy.ops.render.render(write_still=True)
+                  secs=round(time.monotonic()-start,2)
+                  if not os.path.isfile(fpath):raise RuntimeError('PNG missing: '+fpath)
+                  print('DONE',name,secs,os.stat(fpath).st_size,flush=True)
+                  report['files'].append({'file':os.path.basename(fpath),'seconds':secs,'description':description})
+              with open(os.path.join(ROOT,'render_report.json'),'w') as f:json.dump(report,f,indent=2)
+              print('COMPLETE all selected renders',flush=True)
+          
+          if __name__=='__main__':main()
+          PYTHON_RENDERER
+          python3 -m py_compile "$RUNNER_TEMP/render_bone_stills.py"
+          mkdir -p renders
+
+      - name: Render selected premium bone-still scenes
+        shell: bash
+        env:
+          SELECTED_QUALITY: ${{ inputs.quality }}
+          SELECTED_SCENE: ${{ inputs.scene }}
+        run: |
+          set -euo pipefail
+          echo "Render configuration: quality=$SELECTED_QUALITY scene=$SELECTED_SCENE"
+          THREADS="$(nproc)"
+          if (( THREADS > 4 )); then THREADS=4; fi
+          export OMP_NUM_THREADS="$THREADS"
+          time blender --background --factory-startup -noaudio --threads "$THREADS" \
+            --python "$RUNNER_TEMP/render_bone_stills.py" -- \
+            --quality "$SELECTED_QUALITY" --scene "$SELECTED_SCENE"
+
+      - name: Verify artifact PNG dimensions and scene count
+        shell: bash
+        env:
+          SELECTED_QUALITY: ${{ inputs.quality }}
+          SELECTED_SCENE: ${{ inputs.scene }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, glob, struct, json
+          files=sorted(glob.glob('renders/*.png'))
+          expected=3 if os.environ['SELECTED_SCENE']=='all' else 1
+          assert len(files)==expected,(files, expected)
+          w,h=(540,960) if os.environ['SELECTED_QUALITY']=='quick' else (720,1280)
+          for p in files:
+              with open(p,'rb') as f:
+                  head=f.read(24)
+              assert head[:8]==b'\x89PNG\r\n\x1a\n',(p,head)
+              size=struct.unpack('>II',head[16:24])
+              assert size==(w,h),(p,size)
+              assert os.path.getsize(p)>20000,p
+              print('VERIFIED',p,size,os.path.getsize(p),'bytes')
+          print(json.load(open('renders/render_report.json')))
+          PY
+
+      - name: Upload actual Blender-generated stills
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bone-lookdev-${{ inputs.quality }}-${{ inputs.scene }}
+          path: renders/
+          if-no-files-found: warn
+          retention-days: 7
